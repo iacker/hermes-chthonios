@@ -1,10 +1,19 @@
-"""macOS Touch ID / passphrase prompt helpers.
+"""macOS keychain / passphrase prompt helpers.
 
-Touch ID is gated through the system `bioutil`/LocalAuthentication stack. We
-shell out to a tiny osascript/`security` fallback because Hermes plugins and
-CLI run outside a signed app bundle where LAContext is awkward. The passphrase
-is always the cryptographic root of trust; Touch ID only unlocks a passphrase
-that Chthonios stored in the login keychain when the user opted in.
+The passphrase (or, in hardware mode, the YubiKey) is ALWAYS the cryptographic
+root of trust. The keychain-backed helpers here are a CONVENIENCE UNLOCK, not a
+second factor, and must never be described as one:
+
+  * `keychain_fetch` returns the stored passphrase via `security find-generic-
+    password -w`, which does NOT require a biometric touch on an already-unlocked
+    Mac. Anyone at your unlocked session can read it.
+  * `touchid_authenticate` shells `osascript ... with administrator privileges`,
+    a system-auth gate that honours Touch ID when it is enabled for sudo but
+    otherwise falls back to the login password. It gates the *action*, it does
+    not derive or protect the *key*.
+
+For a threat that includes an attacker at your unlocked machine, use the FIDO2
+hardware mode, where the key material never leaves the token. See SECURITY.md.
 """
 from __future__ import annotations
 

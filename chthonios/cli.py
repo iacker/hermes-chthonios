@@ -3,14 +3,17 @@
 chthonios — seal a Hermes profile at rest.
 
     chthonios seal <profile>      encrypt the profile's .env (key-gating ON)
-    chthonios unseal <profile>    decrypt for use (prompts passphrase / Touch ID)
+    chthonios unseal <profile>    decrypt for use (passphrase, or keychain unlock)
     chthonios lock <profile>      drop the plaintext .env, keep the seal
     chthonios status [profile]    show seal/unlock state
+    chthonios verify [profile]    validate seal integrity, no key needed
     chthonios rekey <profile>     change the passphrase
-    chthonios enroll <profile>    store passphrase in login keychain (Touch ID unlock)
+    chthonios enroll <profile>    store passphrase in login keychain (convenience unlock)
 
 Sealed => the profile's API keys are unreadable ciphertext => the profile
-cannot call any model. The passphrase is the cryptographic root of trust.
+cannot call any model. The passphrase (or, in hardware mode, the YubiKey) is
+the cryptographic root of trust. Keychain/Touch ID is a convenience unlock,
+not a second factor: see SECURITY.md.
 """
 from __future__ import annotations
 
@@ -78,7 +81,7 @@ def cmd_seal(args) -> int:
     print(f"'{args.profile}' can no longer read its credentials until unsealed.")
     if args.touchid:
         if auth.keychain_store(args.profile, pw):
-            print("Passphrase enrolled in login keychain (Touch ID unlock).")
+            print("Passphrase stored in login keychain (convenience unlock).")
         else:
             print("Keychain enrollment failed (non-macOS or denied).",
                   file=sys.stderr)
@@ -151,7 +154,7 @@ def cmd_enroll(args) -> int:
         st = profiles.load_state(args.profile)
         st["require_touchid"] = True
         profiles.save_state(args.profile, st)
-        print(f"Enrolled '{args.profile}' for Touch ID unlock.")
+        print(f"Enrolled '{args.profile}' for convenience unlock (keychain).")
         return 0
     print("Keychain enrollment failed.", file=sys.stderr)
     return 1
@@ -228,7 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("profile")
     s.add_argument("--hint", help="non-secret passphrase reminder")
     s.add_argument("--touchid", action="store_true",
-                   help="also enroll for Touch ID unlock")
+                   help="also store passphrase in keychain for convenience unlock")
     s.add_argument("--fido2", action="store_true",
                    help="seal to an enrolled YubiKey (decrypt needs the key)")
     s.add_argument("--recipient", help="explicit age recipient (with --fido2)")
@@ -242,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     u = sub.add_parser("unseal", help="decrypt a profile's .env for use")
     u.add_argument("profile")
     u.add_argument("--touchid", action="store_true",
-                   help="unlock via keychain + Touch ID")
+                   help="unlock via stored keychain passphrase (convenience)")
     u.add_argument("--forget", action="store_true",
                    help="delete the sealed copy after unsealing")
     u.set_defaults(func=cmd_unseal)
@@ -256,7 +259,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--hint")
     r.set_defaults(func=cmd_rekey)
 
-    e = sub.add_parser("enroll", help="store passphrase in keychain for Touch ID")
+    e = sub.add_parser("enroll",
+                       help="store passphrase in keychain for convenience unlock")
     e.add_argument("profile")
     e.set_defaults(func=cmd_enroll)
 

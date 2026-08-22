@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hermes-chthonios"
 version = "0.1.0"
-description = "Seal a Hermes profile at rest: encrypt its credentials until unlocked by passphrase or Touch ID."
+description = "Seal a Hermes profile at rest: encrypt its credentials behind a passphrase or a YubiKey until you unlock it."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }

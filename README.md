@@ -188,8 +188,17 @@ Small, readable, dependency-light. The cryptography lives in one file with no He
 * **Cipher:** AES-256-GCM, authenticated, so tampering is detected on unseal.
 * **KDF:** scrypt, N=2²⁰, r=8, p=1, about 1s per derivation.
 * **Root of trust:** the passphrase, or (hardware mode) the key's `hmac-secret`. The on-disk `.identity` file only wraps a credential to the token; it is useless without the physical key. The `.recipient` (an `age1…` public key) is not secret.
-* **The renderer never decrypts.** The desktop plugin reads seal state only and shells you the CLI command; passphrases and plaintext never touch JS.
+* **Keychain / Touch ID is a convenience, not a factor.** It stores the passphrase for a machine only you use and does not defend against an attacker at your unlocked Mac. For that threat, use hardware mode.
 * **Shredding** of the plaintext `.env` is best-effort (overwrite then unlink). On SSD and copy-on-write filesystems this is not forensic-grade. The seal, not the shred, is the protection.
+
+### What this is NOT
+
+* Not protection for a profile that is currently **unsealed**: at that point the `.env` is normal plaintext for the session. Chthonios protects data at rest, not in use.
+* Not a second factor via Touch ID: the keychain hands the passphrase back without a touch on an unlocked Mac.
+* Not forensic erasure of the old plaintext.
+* Not recoverable if you lose your only hardware key. Keep a spare.
+
+The full threat model, with what each mode does and does not defend against, is in **[SECURITY.md](SECURITY.md)**.
 
 ## License
 
