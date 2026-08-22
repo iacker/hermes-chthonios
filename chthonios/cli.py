@@ -21,7 +21,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, auth, profiles, sealing, agefido, pack as packmod
+from . import __version__, auth, profiles, sealing, agefido, pack as packmod, ui
 
 
 def _resolve_passphrase(profile: str, use_keychain: bool, confirm: bool = False) -> str:
@@ -72,20 +72,25 @@ def cmd_seal(args) -> int:
                   file=sys.stderr)
             return 1
         out = profiles.seal_fido2(args.profile, recipient)
-        print(f"Sealed (FIDO2): {out}")
-        print(f"'{args.profile}' now decrypts ONLY with the enrolled YubiKey.")
+        print(ui.sealed(f"Sealed {ui.c(args.profile, 'white', 'bold')} "
+                        f"{ui.c('(FIDO2)', 'cyan')}  {ui.c(ui.G.arrow, 'grey')}  "
+                        f"{ui.c(str(out), 'dim')}"))
+        print(ui.c(f"   decrypts ONLY with the enrolled YubiKey \u2014 "
+                   "not the agent, not a thief, not a cloned disk", "grey"))
         return 0
     pw = auth.prompt_passphrase("New passphrase: ", confirm=True)
     out = profiles.seal(args.profile, pw, hint=args.hint,
                         require_touchid=args.touchid)
-    print(f"Sealed: {out}")
-    print(f"'{args.profile}' can no longer read its credentials until unsealed.")
+    print(ui.sealed(f"Sealed {ui.c(args.profile, 'white', 'bold')}  "
+                    f"{ui.c(ui.G.arrow, 'grey')}  {ui.c(str(out), 'dim')}"))
+    print(ui.c(f"   credentials are now unreadable until unsealed", "grey"))
     if args.touchid:
         if auth.keychain_store(args.profile, pw):
-            print("Passphrase stored in login keychain (convenience unlock).")
+            print(ui.ok(ui.c("passphrase stored in login keychain "
+                             "(convenience unlock)", "grey")))
         else:
-            print("Keychain enrollment failed (non-macOS or denied).",
-                  file=sys.stderr)
+            print(ui.fail(ui.c("keychain enrollment failed (non-macOS or denied)",
+                               "grey")), file=sys.stderr)
     return 0
 
 
@@ -94,23 +99,27 @@ def cmd_unseal(args) -> int:
         print(f"'{args.profile}' is not sealed.", file=sys.stderr)
         return 1
     if profiles.seal_backend(args.profile) == "fido2-hmac":
-        print(f"Insert your YubiKey and touch it when it blinks...")
+        print(ui.c(f"{ui.G.key} Insert your YubiKey and touch it when it blinks...",
+                   "amber"))
         try:
             path = profiles.unseal_fido2(args.profile, keep_sealed=not args.forget)
         except (agefido.AgeError, sealing.SealError) as e:
             print(str(e), file=sys.stderr)
             return 1
-        print(f"Unsealed (FIDO2): {path}")
-        print(f"'{args.profile}' can now use its credentials for this session.")
+        print(ui.opened(f"Unsealed {ui.c(args.profile, 'white', 'bold')} "
+                        f"{ui.c('(FIDO2)', 'cyan')}  {ui.c(ui.G.arrow, 'grey')}  "
+                        f"{ui.c(str(path), 'dim')}"))
+        print(ui.c("   credentials available for this session", "grey"))
         return 0
     pw = _resolve_passphrase(args.profile, args.touchid)
     try:
         path = profiles.unseal(args.profile, pw, keep_sealed=not args.forget)
     except sealing.UnsealError:
-        print("Wrong passphrase. Profile stays sealed.", file=sys.stderr)
+        print(ui.fail("Wrong passphrase. Profile stays sealed."), file=sys.stderr)
         return 1
-    print(f"Unsealed: {path}")
-    print(f"'{args.profile}' can now use its credentials for this session.")
+    print(ui.opened(f"Unsealed {ui.c(args.profile, 'white', 'bold')}  "
+                    f"{ui.c(ui.G.arrow, 'grey')}  {ui.c(str(path), 'dim')}"))
+    print(ui.c("   credentials available for this session", "grey"))
     return 0
 
 
@@ -189,11 +198,16 @@ def cmd_pack(args) -> int:
             print(str(e), file=sys.stderr)
             return 1
     kind = "directory" if is_dir else "file"
-    print(f"Packed {kind}: {out}")
+    gated = "YubiKey (FIDO2)" if args.fido2 else "passphrase"
+    print(ui.sealed(f"Sealed {kind}  {ui.c(ui.G.arrow, 'grey')}  "
+                    f"{ui.c(str(out), 'cyan', 'bold')}"))
+    print(ui.c(f"   gated by {gated} \u00b7 the agent can seal but cannot open this",
+               "grey"))
     if not args.remove:
-        print("Original kept. Re-run with --remove to shred it after verifying.")
+        print(ui.c(f"   original kept \u2014 re-run with --remove to shred it "
+                   "after verifying", "dim"))
     else:
-        print("Original shredded.")
+        print(ui.ok(ui.c("original shredded", "grey")))
     return 0
 
 
@@ -221,7 +235,8 @@ def cmd_unpack(args) -> int:
         except packmod.sealing.SealError as e:
             print(str(e), file=sys.stderr)
             return 1
-    print(f"Unpacked: {out}")
+    print(ui.opened(f"Unsealed  {ui.c(ui.G.arrow, 'grey')}  "
+                    f"{ui.c(str(out), 'green', 'bold')}"))
     return 0
 
 
@@ -230,8 +245,7 @@ def cmd_status(args) -> int:
         names = [args.profile]
     else:
         names = profiles.list_profiles()
-    print(f"{'PROFILE':<16} {'MANAGED':<8} {'SEALED':<7} {'UNLOCKED':<9} "
-          f"{'BACKEND':<10} {'INTEGRITY':<10} SEALED_AT")
+    rows = []
     for name in names:
         if not profiles.profile_exists(name):
             continue
@@ -241,13 +255,36 @@ def cmd_status(args) -> int:
         if sealed:
             backend = profiles.seal_backend(name)
             rep = profiles.verify(name)
-            integrity = "ok" if rep["ok"] else "CORRUPT"
+            integrity = rep["ok"]
             when = (rep.get("sealed_at") or profiles.sealed_at(name) or "")[:19]
         else:
-            backend = integrity = ""
+            backend = ""
+            integrity = None
             when = ""
-        print(f"{name:<16} {str(managed):<8} {str(sealed):<7} "
-              f"{str(unlocked):<9} {backend:<10} {integrity:<10} {when}")
+        rows.append((name, managed, sealed, unlocked, backend, integrity, when))
+
+    cols = f" {'PROFILE':<15}{'STATE':<9} {'BACKEND':<11}{'INTEGRITY':<11}SEALED AT"
+    print(ui.c(cols, "grey", "bold"))
+    print(ui.c("\u2500" * 62, "grey"))
+    for name, managed, sealed, unlocked, backend, integrity, when in rows:
+        if not managed:
+            state = ui.c(f"{ui.G.chip} unmanaged", "grey")
+            state_w = f"{state}{' ' * max(0, 9 - len('  unmanaged'))}"
+        elif sealed and unlocked:
+            state = f"{ui.c(ui.G.unlock, 'amber')} {ui.c('OPEN', 'amber', 'bold')}"
+            state_w = f"{state}{' ' * 4}"
+        elif sealed:
+            state = f"{ui.c(ui.G.lock, 'violet')} {ui.c('SEALED', 'violet', 'bold')}"
+            state_w = f"{state}{' ' * 2}"
+        else:
+            state = ui.c("  clear", "grey")
+            state_w = f"{state}{' ' * 3}"
+        integ = ("" if integrity is None
+                 else ui.c(f"{ui.G.check} ok", "green") + "     " if integrity
+                 else ui.c(f"{ui.G.cross} CORRUPT", "red"))
+        bk = ui.c(f"{backend:<10}", "cyan") if backend else " " * 10
+        print(f" {ui.c(f'{name:<15}', 'white')}{state_w} {bk} {integ:<11} "
+              f"{ui.c(when, 'dim')}")
     return 0
 
 
@@ -268,7 +305,10 @@ def cmd_verify(args) -> int:
                 print(f"{name}: not sealed")
             continue
         any_sealed = True
-        mark = "OK " if rep["ok"] else "BAD"
+        if rep["ok"]:
+            line = ui.ok(f"{ui.c(name, 'white', 'bold')}  {ui.c(rep['reason'], 'dim')}")
+        else:
+            line = ui.fail(f"{ui.c(name, 'white', 'bold')}  {ui.c(rep['reason'], 'red')}")
         extra = []
         if rep.get("backend"):
             extra.append(rep["backend"])
@@ -276,13 +316,12 @@ def cmd_verify(args) -> int:
             extra.append(f"{rep['size']}B")
         if rep.get("sealed_at"):
             extra.append(rep["sealed_at"][:19])
-        detail = " · ".join(extra)
-        print(f"[{mark}] {name:<16} {rep['reason']}"
-              + (f"  ({detail})" if detail else ""))
+        detail = ui.c(" \u00b7 ".join(extra), "grey")
+        print(line + (f"  ({detail})" if extra else ""))
         if not rep["ok"]:
             bad += 1
     if not any_sealed and not args.profile:
-        print("No sealed profiles.")
+        print(ui.c("No sealed profiles.", "grey"))
     return 1 if bad else 0
 
 

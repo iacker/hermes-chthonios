@@ -143,25 +143,19 @@ chthonios unpack redteam-lab.tar.age \
 
 A single file becomes `<name>.chthonios` / `<name>.age`; a directory is tarred in-process (contents never printed) and becomes `<name>.tar.chthonios` / `<name>.tar.age`. The original is **kept by default** so you can verify the round-trip first; pass `--remove` to shred it only after the artifact is written. Extraction refuses any archive member that would escape the destination (path-traversal guard).
 
+![Sealing and restoring a folder, round-trip verified](assets/cli-pack.png)
+
 ## Auditing what is sealed
 
-`chthonios status` reports every profile at a glance: which are managed, sealed, currently unlocked, with which backend, whether the seal is structurally intact, and when it was sealed.
+`chthonios status` shows every profile at a glance: sealed, open, or unmanaged, with which backend, whether the seal is structurally intact, and when it was sealed. `chthonios verify` structurally validates each seal without any key or passphrase.
 
-```
-PROFILE          MANAGED  SEALED  UNLOCKED  BACKEND    INTEGRITY  SEALED_AT
-redteam          True     True    False     passphrase ok         2026-08-22T21:47:38
-default          False    False   True
-```
+![chthonios status and verify](assets/cli-status.png)
 
-`chthonios verify` goes further and validates each seal's structure without any key or passphrase. It confirms a passphrase seal is a well-formed envelope (known version, valid salt/nonce/ciphertext) and a hardware seal is a valid `age` ciphertext. This catches a corrupted or truncated-to-garbage seal before you rely on it.
+`verify` confirms a passphrase seal is a well-formed envelope (known version, valid salt/nonce/ciphertext) and a hardware seal is a valid `age` ciphertext, catching a corrupted or truncated seal before you rely on it:
 
 ```bash
 chthonios verify           # all profiles, non-zero exit if any seal is broken
 chthonios verify redteam   # one profile
-```
-
-```
-[OK ] redteam          ok  (passphrase · 255B · 2026-08-22T21:47:38)
 ```
 
 What `verify` does not do: it cannot prove the passphrase or run the AES-GCM authentication tag, because both need the key. Only `unseal` does that, and the authenticated cipher rejects any tampered ciphertext at that point. `verify` is a fast structural pre-check; `unseal` is the cryptographic proof.
@@ -175,6 +169,10 @@ Yes. Chthonios is additive and non-invasive:
 * No secrets in the repo: `.env*`, `*.chthonios`, `*.identity`, and `*.recipient` are git-ignored.
 * The desktop plugin is a single drop-in `plugin.js`. Skip it if you don't want UI; the CLI is the whole product.
 
+## Drive it from chat, no CLI
+
+Chthonios ships a Hermes **skill** (`skills/chthonios-seal-from-chat/`) so an agent can seal for you conversationally: say *"seal my redteam profile"* or *"encrypt this folder with my YubiKey"* and it asks what to lock and how, then runs it. The skill encodes the one boundary that matters: **the agent may seal, but a hardware (YubiKey) unseal is always handed back to your own terminal** where the touch happens. It also warns before taking a passphrase in chat and never shreds the original until you have verified the seal opens. Copy the skill folder into `~/.hermes/skills/security/` (or your profile's skills dir) to enable it.
+
 ## How it's built
 
 Small, readable, dependency-light. The cryptography lives in one file with no Hermes imports, so you can audit or reuse it on its own.
@@ -187,6 +185,8 @@ Small, readable, dependency-light. The cryptography lives in one file with no He
 | `chthonios/auth.py` | passphrase prompt, keychain helpers |
 | `chthonios/cli.py` | the `chthonios` command |
 | `desktop-plugin/plugin.js` | statusbar lock chip and commands (reads state only) |
+| `chthonios/ui.py` | tiny ANSI presentation layer (zero deps, honors `NO_COLOR`) |
+| `skills/chthonios-seal-from-chat/` | Hermes skill to seal from chat, with the unseal boundary baked in |
 | `tests/` | round-trip, wrong-passphrase, tamper detection, no-leak |
 
 ## Requirements
