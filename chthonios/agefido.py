@@ -46,15 +46,16 @@ def available() -> bool:
 
 def enroll_command(recipient_out: Path, identity_out: Path) -> str:
     """The interactive command the USER runs in their own terminal to bind a
-    YubiKey. Produces a recipient line and an identity file.
+    YubiKey. Produces an identity file (with the credential) and extracts the
+    age recipient (the `# public key: age1...` line) to a separate file.
 
-    We keep the identity (needed for decryption) and the recipient (needed for
-    encryption) separate so sealing never needs the identity file.
+    Sealing later reads only the recipient; decryption reads the identity.
     """
     return (
-        f"{PLUGIN} -g "
-        f"| tee >(grep '^age1' > {recipient_out}) "
-        f"> {identity_out} && chmod 600 {identity_out} {recipient_out}"
+        f"{PLUGIN} -g > {identity_out} "
+        f"&& grep 'public key:' {identity_out} | sed 's/.*: //' > {recipient_out} "
+        f"&& chmod 600 {identity_out} {recipient_out} "
+        f"&& echo 'Enrolled. recipient -> {recipient_out}'"
     )
 
 
