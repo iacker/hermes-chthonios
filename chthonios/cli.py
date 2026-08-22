@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""
+chthonios — seal a Hermes profile at rest.
+
+    chthonios seal <profile>      encrypt the profile's .env (key-gating ON)
+    chthonios unseal <profile>    decrypt for use (prompts passphrase / Touch ID)
+    chthonios lock <profile>      drop the plaintext .env, keep the seal
+    chthonios status [profile]    show seal/unlock state
+    chthonios rekey <profile>     change the passphrase
+    chthonios enroll <profile>    store passphrase in login keychain (Touch ID unlock)
+
+Sealed => the profile's API keys are unreadable ciphertext => the profile
+cannot call any model. The passphrase is the cryptographic root of trust.
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+
+from . import __version__, auth, profiles, sealing
+
+
+def _resolve_passphrase(profile: str, use_keychain: bool, confirm: bool = False) -> str:
+    if use_keychain:
+        pw = auth.keychain_fetch(profile)
+        if pw:
+            if auth.touchid_authenticate(f"unlock profile '{profile}'"):
+                return pw
+            print("Touch ID / auth failed.", file=sys.stderr)
+            sys.exit(1)
+        print("No keychain passphrase enrolled; falling back to prompt.",
+              file=sys.stderr)
+    return auth.prompt_passphrase(confirm=confirm)
+
+
+def cmd_seal(args) -> int:
+    if not profiles.profile_exists(args.profile):
+        print(f"Profile '{args.profile}' not found.", file=sys.stderr)
+        return 1
+    if profiles.is_sealed(args.profile):
+        print(f"'{args.profile}' is already sealed. Unseal before re-sealing.",
+              file=sys.stderr)
+        return 1
+    pw = auth.prompt_passphrase("New passphrase: ", confirm=True)
+    out = profiles.seal(args.profile, pw, hint=args.hint,
+                        require_touchid=args.touchid)
+    print(f"Sealed: {out}")
+    print(f"'{args.profile}' can no longer read its credentials until unsealed.")
+    if args.touchid:
+        if auth.keychain_store(args.profile, pw):
+            print("Passphrase enrolled in login keychain (Touch ID unlock).")
+        else:
+            print("Keychain enrollment failed (non-macOS or denied).",
+                  file=sys.stderr)
+    return 0
+
+
+def cmd_unseal(args) -> int:
+    if not profiles.is_sealed(args.profile):
+        print(f"'{args.profile}' is not sealed.", file=sys.stderr)
+        return 1
+    pw = _resolve_passphrase(args.profile, args.touchid)
+    try:
+        path = profiles.unseal(args.profile, pw, keep_sealed=not args.forget)
+    except sealing.UnsealError:
+        print("Wrong passphrase. Profile stays sealed.", file=sys.stderr)
+        return 1
+    print(f"Unsealed: {path}")
+    print(f"'{args.profile}' can now use its credentials for this session.")
+    return 0
+
+
+def cmd_lock(args) -> int:
+    try:
+        removed = profiles.relock(args.profile)
+    except sealing.SealError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    print(f"Locked '{args.profile}'." if removed
+          else f"'{args.profile}' was already locked.")
+    return 0
+
+
+def cmd_rekey(args) -> int:
+    if not profiles.is_sealed(args.profile):
+        print(f"'{args.profile}' is not sealed.", file=sys.stderr)
+        return 1
+    old = auth.prompt_passphrase("Current passphrase: ")
+    try:
+        profiles.unseal(args.profile, old, keep_sealed=True)
+    except sealing.UnsealError:
+        print("Wrong passphrase.", file=sys.stderr)
+        return 1
+    # remove old seal, re-seal with new passphrase
+    sealing.sealed_path(profiles.env_path(args.profile)).unlink()
+    new = auth.prompt_passphrase("New passphrase: ", confirm=True)
+    profiles.seal(args.profile, new, hint=args.hint)
+    print(f"Rekeyed '{args.profile}'.")
+    return 0
+
+
+def cmd_enroll(args) -> int:
+    pw = auth.prompt_passphrase("Passphrase to enroll: ")
+    try:
+        profiles.unseal(args.profile, pw, keep_sealed=True)
+        profiles.relock(args.profile)
+    except sealing.UnsealError:
+        print("Wrong passphrase; not enrolling.", file=sys.stderr)
+        return 1
+    if auth.keychain_store(args.profile, pw):
+        st = profiles.load_state(args.profile)
+        st["require_touchid"] = True
+        profiles.save_state(args.profile, st)
+        print(f"Enrolled '{args.profile}' for Touch ID unlock.")
+        return 0
+    print("Keychain enrollment failed.", file=sys.stderr)
+    return 1
+
+
+def cmd_status(args) -> int:
+    if args.profile:
+        names = [args.profile]
+    else:
+        base = profiles.hermes_home() / "profiles"
+        names = ["default"] + sorted(
+            p.name for p in base.iterdir() if p.is_dir()
+        ) if base.is_dir() else ["default"]
+    print(f"{'PROFILE':<16} {'MANAGED':<9} {'SEALED':<8} {'UNLOCKED':<9} TOUCHID")
+    for name in names:
+        if not profiles.profile_exists(name):
+            continue
+        managed = profiles.is_managed(name)
+        sealed = profiles.is_sealed(name)
+        unlocked = profiles.is_unlocked(name)
+        tid = profiles.load_state(name).get("require_touchid", False)
+        print(f"{name:<16} {str(managed):<9} {str(sealed):<8} "
+              f"{str(unlocked):<9} {tid}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="chthonios", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version", version=f"chthonios {__version__}")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("seal", help="encrypt a profile's .env")
+    s.add_argument("profile")
+    s.add_argument("--hint", help="non-secret passphrase reminder")
+    s.add_argument("--touchid", action="store_true",
+                   help="also enroll for Touch ID unlock")
+    s.set_defaults(func=cmd_seal)
+
+    u = sub.add_parser("unseal", help="decrypt a profile's .env for use")
+    u.add_argument("profile")
+    u.add_argument("--touchid", action="store_true",
+                   help="unlock via keychain + Touch ID")
+    u.add_argument("--forget", action="store_true",
+                   help="delete the sealed copy after unsealing")
+    u.set_defaults(func=cmd_unseal)
+
+    l = sub.add_parser("lock", help="drop the plaintext .env, keep the seal")
+    l.add_argument("profile")
+    l.set_defaults(func=cmd_lock)
+
+    r = sub.add_parser("rekey", help="change a profile's passphrase")
+    r.add_argument("profile")
+    r.add_argument("--hint")
+    r.set_defaults(func=cmd_rekey)
+
+    e = sub.add_parser("enroll", help="store passphrase in keychain for Touch ID")
+    e.add_argument("profile")
+    e.set_defaults(func=cmd_enroll)
+
+    st = sub.add_parser("status", help="show seal/unlock state")
+    st.add_argument("profile", nargs="?")
+    st.set_defaults(func=cmd_status)
+    return p
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-chthonios"
+version = "0.1.0"
+description = "Seal a Hermes profile at rest: encrypt its credentials until unlocked by passphrase or Touch ID."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "iacker" }]
+keywords = ["hermes", "hermes-agent", "security", "encryption", "profile", "touchid"]
+dependencies = ["cryptography>=41"]
+
+[project.urls]
+Homepage = "https://github.com/iacker/hermes-chthonios"
+Issues = "https://github.com/NousResearch/hermes-agent/issues/81795"
+
+[project.scripts]
+chthonios = "chthonios.cli:main"
+
+[tool.setuptools]
+packages = ["chthonios"]

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Chthonios must NEVER commit real secrets or seals
+*.env
+.env
+.env.*
+*.chthonios
+chthonios.json
+
+# OS
+.DS_Store
