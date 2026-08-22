@@ -117,6 +117,76 @@ def seal_backend(profile: str) -> str:
     return load_state(profile).get("source", "passphrase")
 
 
+def list_profiles() -> list[str]:
+    """Every known profile name, de-duplicated, 'default' first.
+
+    'default' lives at the hermes home root, but a profiles/default directory
+    may also exist; both map to the same profile, so it must appear once.
+    """
+    names = ["default"]
+    base = hermes_home() / "profiles"
+    if base.is_dir():
+        for p in sorted(base.iterdir()):
+            if p.is_dir() and p.name not in names:
+                names.append(p.name)
+    return names
+
+
+def verify(profile: str) -> dict:
+    """Structurally validate a profile's seal WITHOUT any key or passphrase.
+
+    Reads the sealed file and checks it is a well-formed envelope (passphrase
+    seal) or a valid age ciphertext (FIDO2 seal). Catches truncation and
+    corruption; does not attempt decryption. Returns a report dict with
+    {profile, sealed, backend, ok, reason, sealed_at, size, ...}.
+    """
+    ep = env_path(profile)
+    src = sealing.sealed_path(ep)
+    report = {"profile": profile, "sealed": False, "backend": None,
+              "ok": None, "reason": "not sealed", "sealed_at": None,
+              "size": None}
+    if not src.exists():
+        return report
+    report["sealed"] = True
+    try:
+        raw = src.read_bytes()
+    except OSError as e:
+        report.update(ok=False, reason=f"unreadable: {e}")
+        return report
+    report["size"] = len(raw)
+    backend = seal_backend(profile)
+    report["backend"] = backend
+    if backend == "fido2-hmac":
+        ok = agefido.is_age_ciphertext(raw)
+        report.update(ok=ok,
+                      reason="valid age ciphertext" if ok
+                      else "not a recognized age ciphertext header")
+    else:
+        rep = sealing.inspect_envelope(raw)
+        report.update(ok=rep["valid"], reason=rep["reason"],
+                      sealed_at=rep.get("sealed_at"),
+                      ct_bytes=rep.get("ct_bytes"), hint=rep.get("hint"))
+    return report
+
+
+def sealed_at(profile: str) -> Optional[str]:
+    """Best-effort ISO timestamp of when a passphrase seal was written."""
+    src = sealing.sealed_path(env_path(profile))
+    if not src.exists():
+        return None
+    if seal_backend(profile) == "fido2-hmac":
+        try:
+            import datetime as _dt
+            return _dt.datetime.fromtimestamp(
+                src.stat().st_mtime, _dt.timezone.utc).isoformat(timespec="seconds")
+        except OSError:
+            return None
+    try:
+        return sealing.inspect_envelope(src.read_bytes()).get("sealed_at")
+    except OSError:
+        return None
+
+
 def seal(profile: str, passphrase: str, hint: Optional[str] = None,
          require_touchid: bool = False) -> Path:
     out = sealing.seal_file(env_path(profile), passphrase, hint=hint)

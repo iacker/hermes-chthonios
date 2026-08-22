@@ -32,8 +32,23 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 SEAL_VERSION = 1
-# scrypt work factor. N=2**20 ~ interactive-secure on a modern laptop (~1s).
-SCRYPT_N = 1 << 20
+# scrypt work factor. N=2**20 ~ interactive-secure on a modern laptop (~1s,
+# ~1GB RAM). Overridable via CHTHONIOS_SCRYPT_N so tests/CI can run cheaply;
+# the chosen N is stored in each envelope, so seals remain self-describing and
+# a low-N test seal still unseals correctly.
+def _default_scrypt_n() -> int:
+    raw = os.environ.get("CHTHONIOS_SCRYPT_N")
+    if raw:
+        try:
+            n = int(raw)
+            if n >= 2 and (n & (n - 1)) == 0:  # power of two, >=2
+                return n
+        except ValueError:
+            pass
+    return 1 << 20
+
+
+SCRYPT_N = _default_scrypt_n()
 SCRYPT_R = 8
 SCRYPT_P = 1
 KEY_LEN = 32  # AES-256
@@ -68,12 +83,13 @@ def seal_bytes(plaintext: bytes, passphrase: str, hint: Optional[str] = None) ->
         raise SealError("empty passphrase refused")
     salt = os.urandom(16)
     nonce = os.urandom(12)
-    key = _derive_key(passphrase, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P)
+    n = _default_scrypt_n()
+    key = _derive_key(passphrase, salt, n, SCRYPT_R, SCRYPT_P)
     ct = AESGCM(key).encrypt(nonce, plaintext, None)
     envelope = {
         "v": SEAL_VERSION,
         "kdf": "scrypt",
-        "n": SCRYPT_N,
+        "n": n,
         "r": SCRYPT_R,
         "p": SCRYPT_P,
         "salt": _b64e(salt),
@@ -156,6 +172,57 @@ def unseal_file(env_path: Path, passphrase: str, keep_sealed: bool = True) -> Pa
     if not keep_sealed:
         src.unlink()
     return env_path
+
+
+def inspect_envelope(raw: bytes) -> dict:
+    """Structurally validate a passphrase seal WITHOUT the key.
+
+    Confirms the JSON envelope is well-formed, carries a known version, and
+    that salt/nonce/ct are valid base64 of sane lengths. This does not (and
+    cannot) prove the passphrase or run the AES-GCM tag check, but it catches
+    truncation, corruption, and tampering with the envelope structure.
+
+    Returns a report dict: {valid: bool, reason: str, kdf, n, r, p,
+    sealed_at, hint, ct_bytes}. Never raises.
+    """
+    report: dict = {"valid": False, "reason": "", "kdf": None,
+                    "sealed_at": None, "hint": None, "ct_bytes": None}
+    try:
+        env = json.loads(raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        report["reason"] = f"not valid JSON ({e})"
+        return report
+    if not isinstance(env, dict):
+        report["reason"] = "envelope is not an object"
+        return report
+    v = env.get("v")
+    if v != SEAL_VERSION:
+        report["reason"] = f"unknown seal version: {v!r}"
+        return report
+    for field, minlen in (("salt", 16), ("nonce", 12), ("ct", 16)):
+        val = env.get(field)
+        if not isinstance(val, str):
+            report["reason"] = f"missing/invalid field: {field}"
+            return report
+        try:
+            decoded = base64.b64decode(val.encode("ascii"), validate=True)
+        except (ValueError, Exception):  # noqa: BLE001
+            report["reason"] = f"field {field} is not valid base64"
+            return report
+        if len(decoded) < minlen:
+            report["reason"] = f"field {field} too short ({len(decoded)}<{minlen})"
+            return report
+        if field == "ct":
+            report["ct_bytes"] = len(decoded)
+    report.update({
+        "valid": True,
+        "reason": "ok",
+        "kdf": env.get("kdf"),
+        "n": env.get("n"), "r": env.get("r"), "p": env.get("p"),
+        "sealed_at": env.get("sealed_at"),
+        "hint": env.get("hint"),
+    })
+    return report
 
 
 def _shred(path: Path, passes: int = 1) -> None:

@@ -123,13 +123,26 @@ Nothing decrypts a hardware-sealed profile without the physical key in hand: not
 
 ## Auditing what is sealed
 
-`chthonios status` prints the seal state of every profile, so you can see at a glance what is protected and what is still exposed:
+`chthonios status` reports every profile at a glance: which are managed, sealed, currently unlocked, with which backend, whether the seal is structurally intact, and when it was sealed.
 
 ```
-PROFILE          MANAGED   SEALED   UNLOCKED  TOUCHID
-redteam          True      True     False     False
-default          False     False    True      False
+PROFILE          MANAGED  SEALED  UNLOCKED  BACKEND    INTEGRITY  SEALED_AT
+redteam          True     True    False     passphrase ok         2026-08-22T21:47:38
+default          False    False   True
 ```
+
+`chthonios verify` goes further and validates each seal's structure without any key or passphrase. It confirms a passphrase seal is a well-formed envelope (known version, valid salt/nonce/ciphertext) and a hardware seal is a valid `age` ciphertext. This catches a corrupted or truncated-to-garbage seal before you rely on it.
+
+```bash
+chthonios verify           # all profiles, non-zero exit if any seal is broken
+chthonios verify redteam   # one profile
+```
+
+```
+[OK ] redteam          ok  (passphrase · 255B · 2026-08-22T21:47:38)
+```
+
+What `verify` does not do: it cannot prove the passphrase or run the AES-GCM authentication tag, because both need the key. Only `unseal` does that, and the authenticated cipher rejects any tampered ciphertext at that point. `verify` is a fast structural pre-check; `unseal` is the cryptographic proof.
 
 ## Is it easy to plug in?
 

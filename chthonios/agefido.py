@@ -44,6 +44,15 @@ def available() -> bool:
     return bool(shutil.which("age") and shutil.which(PLUGIN))
 
 
+AGE_MAGIC = b"age-encryption.org/v1"
+
+
+def is_age_ciphertext(raw: bytes) -> bool:
+    """True if `raw` begins with the age v1 header. Lets Chthonios validate a
+    FIDO2 seal's structure without the token (decryption still needs the key)."""
+    return raw[:len(AGE_MAGIC)] == AGE_MAGIC
+
+
 def enroll_command(recipient_out: Path, identity_out: Path) -> str:
     """The interactive command the USER runs in their own terminal to bind a
     YubiKey. Produces an identity file (with the credential) and extracts the

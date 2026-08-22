@@ -161,21 +161,61 @@ def cmd_status(args) -> int:
     if args.profile:
         names = [args.profile]
     else:
-        base = profiles.hermes_home() / "profiles"
-        names = ["default"] + sorted(
-            p.name for p in base.iterdir() if p.is_dir()
-        ) if base.is_dir() else ["default"]
-    print(f"{'PROFILE':<16} {'MANAGED':<9} {'SEALED':<8} {'UNLOCKED':<9} TOUCHID")
+        names = profiles.list_profiles()
+    print(f"{'PROFILE':<16} {'MANAGED':<8} {'SEALED':<7} {'UNLOCKED':<9} "
+          f"{'BACKEND':<10} {'INTEGRITY':<10} SEALED_AT")
     for name in names:
         if not profiles.profile_exists(name):
             continue
         managed = profiles.is_managed(name)
         sealed = profiles.is_sealed(name)
         unlocked = profiles.is_unlocked(name)
-        tid = profiles.load_state(name).get("require_touchid", False)
-        print(f"{name:<16} {str(managed):<9} {str(sealed):<8} "
-              f"{str(unlocked):<9} {tid}")
+        if sealed:
+            backend = profiles.seal_backend(name)
+            rep = profiles.verify(name)
+            integrity = "ok" if rep["ok"] else "CORRUPT"
+            when = (rep.get("sealed_at") or profiles.sealed_at(name) or "")[:19]
+        else:
+            backend = integrity = ""
+            when = ""
+        print(f"{name:<16} {str(managed):<8} {str(sealed):<7} "
+              f"{str(unlocked):<9} {backend:<10} {integrity:<10} {when}")
     return 0
+
+
+def cmd_verify(args) -> int:
+    """Structurally validate seals without any key or passphrase."""
+    names = [args.profile] if args.profile else profiles.list_profiles()
+    any_sealed = False
+    bad = 0
+    for name in names:
+        if not profiles.profile_exists(name):
+            if args.profile:
+                print(f"Profile '{name}' not found.", file=sys.stderr)
+                return 1
+            continue
+        rep = profiles.verify(name)
+        if not rep["sealed"]:
+            if args.profile:
+                print(f"{name}: not sealed")
+            continue
+        any_sealed = True
+        mark = "OK " if rep["ok"] else "BAD"
+        extra = []
+        if rep.get("backend"):
+            extra.append(rep["backend"])
+        if rep.get("size") is not None:
+            extra.append(f"{rep['size']}B")
+        if rep.get("sealed_at"):
+            extra.append(rep["sealed_at"][:19])
+        detail = " · ".join(extra)
+        print(f"[{mark}] {name:<16} {rep['reason']}"
+              + (f"  ({detail})" if detail else ""))
+        if not rep["ok"]:
+            bad += 1
+    if not any_sealed and not args.profile:
+        print("No sealed profiles.")
+    return 1 if bad else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -223,6 +263,11 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("status", help="show seal/unlock state")
     st.add_argument("profile", nargs="?")
     st.set_defaults(func=cmd_status)
+
+    vf = sub.add_parser("verify",
+                        help="validate seal integrity without a key/passphrase")
+    vf.add_argument("profile", nargs="?")
+    vf.set_defaults(func=cmd_verify)
     return p
 
 
