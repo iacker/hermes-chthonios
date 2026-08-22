@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
-from . import __version__, auth, profiles, sealing, agefido
+from . import __version__, auth, profiles, sealing, agefido, pack as packmod
 
 
 def _resolve_passphrase(profile: str, use_keychain: bool, confirm: bool = False) -> str:
@@ -160,6 +161,70 @@ def cmd_enroll(args) -> int:
     return 1
 
 
+def cmd_pack(args) -> int:
+    """Seal an arbitrary file or directory (not a Hermes profile)."""
+    src = args.path
+    if args.fido2:
+        if not agefido.available():
+            print("age + age-plugin-fido2-hmac required for --fido2.",
+                  file=sys.stderr)
+            return 1
+        recipient = args.recipient
+        if not recipient and args.recipient_file:
+            recipient = Path(args.recipient_file).expanduser().read_text().strip()
+        if not recipient:
+            print("--fido2 needs --recipient or --recipient-file "
+                  "(from `chthonios enroll-key`).", file=sys.stderr)
+            return 1
+        try:
+            out, is_dir = packmod.pack(src, recipient=recipient, remove=args.remove)
+        except (packmod.sealing.SealError, agefido.AgeError) as e:
+            print(str(e), file=sys.stderr)
+            return 1
+    else:
+        pw = auth.prompt_passphrase("New passphrase: ", confirm=True)
+        try:
+            out, is_dir = packmod.pack(src, passphrase=pw, remove=args.remove)
+        except packmod.sealing.SealError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+    kind = "directory" if is_dir else "file"
+    print(f"Packed {kind}: {out}")
+    if not args.remove:
+        print("Original kept. Re-run with --remove to shred it after verifying.")
+    else:
+        print("Original shredded.")
+    return 0
+
+
+def cmd_unpack(args) -> int:
+    sealed = Path(args.artifact)
+    if sealed.name.endswith(packmod.AGE_SUFFIX):
+        idf = args.identity
+        if not idf:
+            print("age artifact: pass --identity <file> "
+                  "(run unpack in your own terminal; needs the YubiKey + touch).",
+                  file=sys.stderr)
+            return 1
+        try:
+            out = packmod.unpack(sealed, identity=idf, dest=args.dest)
+        except (packmod.sealing.SealError, agefido.AgeError) as e:
+            print(str(e), file=sys.stderr)
+            return 1
+    else:
+        pw = auth.prompt_passphrase()
+        try:
+            out = packmod.unpack(sealed, passphrase=pw, dest=args.dest)
+        except packmod.sealing.UnsealError:
+            print("Wrong passphrase.", file=sys.stderr)
+            return 1
+        except packmod.sealing.SealError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+    print(f"Unpacked: {out}")
+    return 0
+
+
 def cmd_status(args) -> int:
     if args.profile:
         names = [args.profile]
@@ -272,6 +337,24 @@ def build_parser() -> argparse.ArgumentParser:
                         help="validate seal integrity without a key/passphrase")
     vf.add_argument("profile", nargs="?")
     vf.set_defaults(func=cmd_verify)
+
+    pk = sub.add_parser("pack",
+                        help="seal ANY file or directory (not just a profile)")
+    pk.add_argument("path", help="file or directory to seal")
+    pk.add_argument("--fido2", action="store_true",
+                    help="seal to a YubiKey recipient instead of a passphrase")
+    pk.add_argument("--recipient", help="age recipient (with --fido2)")
+    pk.add_argument("--recipient-file",
+                    help="file holding the age recipient (with --fido2)")
+    pk.add_argument("--remove", action="store_true",
+                    help="shred the original after packing (default: keep it)")
+    pk.set_defaults(func=cmd_pack)
+
+    up = sub.add_parser("unpack", help="restore a packed file or directory")
+    up.add_argument("artifact", help="the .chthonios or .age artifact")
+    up.add_argument("--identity", help="age identity file (for .age artifacts)")
+    up.add_argument("--dest", help="destination directory (default: alongside)")
+    up.set_defaults(func=cmd_unpack)
     return p
 
 

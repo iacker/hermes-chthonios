@@ -121,6 +121,28 @@ chthonios unseal redteam
 
 Nothing decrypts a hardware-sealed profile without the physical key in hand: not the agent, not a thief with your Mac, not a cloned disk.
 
+## Sealing anything, not just profiles
+
+The same engine locks any file or directory you point it at, so Chthonios doubles as a general vault for a research folder, a notes vault, a scratch dir of credentials. Sealing needs no key (passphrase prompt, or a YubiKey recipient); unsealing enforces whatever the artifact was sealed with.
+
+```bash
+# Passphrase (works everywhere)
+chthonios pack   ~/notes/redteam-lab          # -> redteam-lab.tar.chthonios
+chthonios unpack redteam-lab.tar.chthonios    # restores alongside
+
+# YubiKey (hardware-gated), seal with just the public recipient, no touch:
+chthonios pack ~/notes/redteam-lab --fido2 \
+  --recipient-file ~/.hermes/profiles/redteam/.chthonios.recipient
+# -> redteam-lab.tar.age
+
+# Unseal REQUIRES the key plugged in + a touch (run in YOUR terminal):
+chthonios unpack redteam-lab.tar.age \
+  --identity ~/.hermes/profiles/redteam/.chthonios.identity \
+  --dest ~/restored
+```
+
+A single file becomes `<name>.chthonios` / `<name>.age`; a directory is tarred in-process (contents never printed) and becomes `<name>.tar.chthonios` / `<name>.tar.age`. The original is **kept by default** so you can verify the round-trip first; pass `--remove` to shred it only after the artifact is written. Extraction refuses any archive member that would escape the destination (path-traversal guard).
+
 ## Auditing what is sealed
 
 `chthonios status` reports every profile at a glance: which are managed, sealed, currently unlocked, with which backend, whether the seal is structurally intact, and when it was sealed.
