@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import sealing
+from . import agefido
 
 STATE_FILE = "chthonios.json"  # per-profile, non-secret metadata
 
@@ -64,6 +65,56 @@ def is_unlocked(profile: str) -> bool:
 def is_managed(profile: str) -> bool:
     """Chthonios manages a profile once it has ever been sealed."""
     return load_state(profile).get("managed", False) or is_sealed(profile)
+
+
+def identity_path(profile: str) -> Path:
+    """Where the FIDO2 age identity file lives for a profile (0600)."""
+    return profile_dir(profile) / ".chthonios.identity"
+
+
+def seal_fido2(profile: str, recipient: str) -> Path:
+    """Encrypt the profile's .env to a FIDO2 age recipient. No token needed
+    to seal. The plaintext .env is shredded; only the age ciphertext remains.
+    """
+    ep = env_path(profile)
+    out = sealing.sealed_path(ep)
+    if out.exists():
+        raise sealing.SealError(f"already sealed: {out}")
+    if not ep.exists():
+        raise sealing.SealError(f"nothing to seal: {ep} does not exist")
+    ciphertext = agefido.encrypt_to_recipient(ep.read_bytes(), recipient)
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    tmp.write_bytes(ciphertext)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, out)
+    sealing._shred(ep)
+    st = load_state(profile)
+    st.update({"managed": True, "source": "fido2-hmac", "recipient": recipient})
+    save_state(profile, st)
+    return out
+
+
+def unseal_fido2(profile: str, keep_sealed: bool = True) -> Path:
+    """Decrypt with the FIDO2 identity. REQUIRES the YubiKey + a touch.
+    Must run in a TTY (the user's terminal), not the agent.
+    """
+    ep = env_path(profile)
+    src = sealing.sealed_path(ep)
+    if not src.exists():
+        raise sealing.SealError(f"not sealed: {src}")
+    plaintext = agefido.decrypt_with_identity(src.read_bytes(), identity_path(profile))
+    tmp = ep.with_suffix(ep.suffix + ".tmp")
+    tmp.write_bytes(plaintext)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, ep)
+    if not keep_sealed:
+        src.unlink()
+    return ep
+
+
+def seal_backend(profile: str) -> str:
+    """Return which backend sealed this profile: 'fido2-hmac' or 'passphrase'."""
+    return load_state(profile).get("source", "passphrase")
 
 
 def seal(profile: str, passphrase: str, hint: Optional[str] = None,

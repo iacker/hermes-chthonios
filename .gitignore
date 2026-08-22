@@ -18,3 +18,8 @@ chthonios.json
 
 # OS
 .DS_Store
+
+# FIDO2 identities / recipients (never commit)
+*.identity
+.chthonios.identity
+.chthonios.recipient

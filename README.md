@@ -7,8 +7,34 @@ locks, independent:
 
 | Lock | What it protects | Mechanism |
 |------|------------------|-----------|
-| **Key-gating** (core) | The profile's *ability to function* | The profile's `.env` is encrypted at rest with **AES-256-GCM**, key derived from a passphrase via **scrypt** (N=2²⁰). Sealed ⇒ keys are ciphertext ⇒ no model responds. |
-| **UI lock** (desktop) | *Casual access* on an unlocked machine | Desktop plugin surfaces seal state, warns when a sealed profile is unlocked, and drives lock via passphrase / **Touch ID** (login keychain). |
+| **Key-gating — passphrase** | The profile's *ability to function* | The profile's `.env` is encrypted at rest with **AES-256-GCM**, key derived from a passphrase via **scrypt** (N=2²⁰). |
+| **Key-gating — YubiKey (FIDO2)** | Same, but with a *physical* root of trust | The `.env` is encrypted via **`age` + FIDO2 hmac-secret**. Decryption requires the hardware key **physically present + a touch**. Sealing does not — so an unattended agent can lock the profile, but **only a human holding the key can unlock it**. |
+| **UI lock** (desktop) | *Casual access* on an unlocked machine | Desktop plugin surfaces seal state and warns when a sealed profile is unlocked. |
+
+Sealed ⇒ the API keys are ciphertext ⇒ no model responds until you unlock.
+
+### YubiKey / FIDO2 mode (hardware-gated)
+
+The strongest mode. The profile can only be decrypted by the enrolled security
+key — lose the key from the USB port and the profile is inert. Crucially, the
+**seal** step needs no key, so automation can re-lock a profile it must never be
+able to re-open on its own.
+
+```bash
+# 1. Bind your YubiKey (interactive — run in YOUR terminal, needs a touch):
+chthonios enroll-key redteam         # prints the exact command to run
+
+# 2. Seal to the key (no touch needed — encryption only):
+chthonios seal redteam --fido2
+
+# 3. Unseal later (REQUIRES the YubiKey plugged in + a touch):
+chthonios unseal redteam
+```
+
+Requirements: [`age`](https://github.com/FiloSottile/age) ≥ 1.1,
+[`age-plugin-fido2-hmac`](https://github.com/olastor/age-plugin-fido2-hmac),
+and `libfido2`. Any FIDO2 authenticator with the `hmac-secret` extension works
+(tested on a YubiKey Security Key C NFC, firmware 5.4.3).
 
 This is stronger than a UI passcode alone: a passcode only stops someone looking
 at the screen and is bypassable from the CLI. Key-gating means the secrets are

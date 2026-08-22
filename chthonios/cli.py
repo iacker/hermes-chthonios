@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import __version__, auth, profiles, sealing
+from . import __version__, auth, profiles, sealing, agefido
 
 
 def _resolve_passphrase(profile: str, use_keychain: bool, confirm: bool = False) -> str:
@@ -33,6 +33,22 @@ def _resolve_passphrase(profile: str, use_keychain: bool, confirm: bool = False)
     return auth.prompt_passphrase(confirm=confirm)
 
 
+def cmd_enroll_key(args) -> int:
+    """Print the interactive command the user must run to bind a YubiKey."""
+    if not agefido.available():
+        print("age + age-plugin-fido2-hmac required "
+              "(brew install age; go install ...age-plugin-fido2-hmac).",
+              file=sys.stderr)
+        return 1
+    rec = profiles.profile_dir(args.profile) / ".chthonios.recipient"
+    idf = profiles.identity_path(args.profile)
+    print("Run THIS in your own terminal (needs the YubiKey + a touch):\n")
+    print(f"  {agefido.enroll_command(rec, idf)}\n")
+    print("Then seal with:")
+    print(f"  chthonios seal {args.profile} --fido2")
+    return 0
+
+
 def cmd_seal(args) -> int:
     if not profiles.profile_exists(args.profile):
         print(f"Profile '{args.profile}' not found.", file=sys.stderr)
@@ -41,6 +57,20 @@ def cmd_seal(args) -> int:
         print(f"'{args.profile}' is already sealed. Unseal before re-sealing.",
               file=sys.stderr)
         return 1
+    if args.fido2:
+        rec_file = profiles.profile_dir(args.profile) / ".chthonios.recipient"
+        if args.recipient:
+            recipient = args.recipient
+        elif rec_file.exists():
+            recipient = rec_file.read_text().strip()
+        else:
+            print(f"No recipient found. Run: chthonios enroll-key {args.profile}",
+                  file=sys.stderr)
+            return 1
+        out = profiles.seal_fido2(args.profile, recipient)
+        print(f"Sealed (FIDO2): {out}")
+        print(f"'{args.profile}' now decrypts ONLY with the enrolled YubiKey.")
+        return 0
     pw = auth.prompt_passphrase("New passphrase: ", confirm=True)
     out = profiles.seal(args.profile, pw, hint=args.hint,
                         require_touchid=args.touchid)
@@ -59,6 +89,16 @@ def cmd_unseal(args) -> int:
     if not profiles.is_sealed(args.profile):
         print(f"'{args.profile}' is not sealed.", file=sys.stderr)
         return 1
+    if profiles.seal_backend(args.profile) == "fido2-hmac":
+        print(f"Insert your YubiKey and touch it when it blinks...")
+        try:
+            path = profiles.unseal_fido2(args.profile, keep_sealed=not args.forget)
+        except (agefido.AgeError, sealing.SealError) as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        print(f"Unsealed (FIDO2): {path}")
+        print(f"'{args.profile}' can now use its credentials for this session.")
+        return 0
     pw = _resolve_passphrase(args.profile, args.touchid)
     try:
         path = profiles.unseal(args.profile, pw, keep_sealed=not args.forget)
@@ -149,7 +189,15 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--hint", help="non-secret passphrase reminder")
     s.add_argument("--touchid", action="store_true",
                    help="also enroll for Touch ID unlock")
+    s.add_argument("--fido2", action="store_true",
+                   help="seal to an enrolled YubiKey (decrypt needs the key)")
+    s.add_argument("--recipient", help="explicit age recipient (with --fido2)")
     s.set_defaults(func=cmd_seal)
+
+    ek = sub.add_parser("enroll-key",
+                        help="print the command to bind a YubiKey (FIDO2)")
+    ek.add_argument("profile")
+    ek.set_defaults(func=cmd_enroll_key)
 
     u = sub.add_parser("unseal", help="decrypt a profile's .env for use")
     u.add_argument("profile")
