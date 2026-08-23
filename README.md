@@ -149,6 +149,8 @@ A single file becomes `<name>.chthonios` / `<name>.age`; a directory is tarred i
 
 Sealing a `.env` protects one profile. But a lot of setups already keep their API keys in a real secret manager: HashiCorp Vault, for instance. Hermes has a built-in Vault secret source that reads your keys from a KV path at startup and injects them as environment variables, so nothing sits in a plaintext `.env` at all.
 
+> **Credit where due.** The Vault secret source itself is [`hermes-vault-secret-source`](https://github.com/cryptoyasenka/hermes-vault-secret-source) by [cryptoyasenka](https://github.com/cryptoyasenka) (`pip install hermes-vault-secret-source`, MIT) — a clean standalone plugin that reads a KV v2 path via `hvac`. Chthonios does not reimplement it; it composes with it, adding the one thing it cannot do on its own: put a physical key in front of the token that unlocks it.
+
 That source has one weak spot, and Chthonios closes it. To reach Vault, Hermes needs a single bootstrap credential in the environment first: `VAULT_TOKEN`. With that token, every key in Vault is reachable. Without it, nothing is. So the whole game reduces to one token, and Chthonios seals *that one token* behind your YubiKey.
 
 ```mermaid
