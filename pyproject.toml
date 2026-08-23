@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-chthonios"
-version = "0.1.0"
-description = "Seal a Hermes profile at rest: encrypt its credentials behind a passphrase or a YubiKey until you unlock it."
+version = "0.2.0"
+description = "Seal a Hermes profile at rest, or seal the one HashiCorp Vault token that unlocks all its keys, behind a passphrase or a YubiKey."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "iacker" }]
-keywords = ["hermes", "hermes-agent", "security", "encryption", "profile", "touchid"]
+keywords = ["hermes", "hermes-agent", "security", "encryption", "profile", "touchid", "vault", "hashicorp", "yubikey"]
 dependencies = ["cryptography>=41"]
 
 [project.urls]

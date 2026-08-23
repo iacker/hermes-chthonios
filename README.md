@@ -9,7 +9,7 @@
 [![ci](https://github.com/iacker/hermes-chthonios/actions/workflows/ci.yml/badge.svg)](https://github.com/iacker/hermes-chthonios/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-a855f7.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3ce0e0.svg)](https://www.python.org/)
-[![version](https://img.shields.io/badge/version-0.1.0-8b5cf6.svg)](pyproject.toml)
+[![version](https://img.shields.io/badge/version-0.2.0-8b5cf6.svg)](pyproject.toml)
 [![platform](https://img.shields.io/badge/macOS%20%7C%20Linux-1f2430.svg)](#requirements)
 
 </div>
@@ -145,6 +145,60 @@ A single file becomes `<name>.chthonios` / `<name>.age`; a directory is tarred i
 
 ![Sealing and restoring a folder, round-trip verified](assets/cli-pack.png)
 
+## Guarding a whole secret manager with the key: HashiCorp Vault
+
+Sealing a `.env` protects one profile. But a lot of setups already keep their API keys in a real secret manager: HashiCorp Vault, for instance. Hermes has a built-in Vault secret source that reads your keys from a KV path at startup and injects them as environment variables, so nothing sits in a plaintext `.env` at all.
+
+That source has one weak spot, and Chthonios closes it. To reach Vault, Hermes needs a single bootstrap credential in the environment first: `VAULT_TOKEN`. With that token, every key in Vault is reachable. Without it, nothing is. So the whole game reduces to one token, and Chthonios seals *that one token* behind your YubiKey.
+
+```mermaid
+flowchart LR
+    Y["YubiKey · FIDO2<br/>touch + PIN"]
+    S[".chthonios.vault-token<br/>sealed token"]
+    T["VAULT_TOKEN<br/>in-memory only"]
+    V["HashiCorp Vault<br/>N API keys"]
+    H["Hermes<br/>reads keys at startup"]
+
+    S -- "unseal (needs YOU)" --> T
+    Y -. unlocks .-> S
+    T --> V
+    V -- "injects keys" --> H
+
+    style S fill:#2a1a3a,stroke:#a855f7,color:#eee
+    style T fill:#1a1f2e,stroke:#3ce0e0,color:#eee
+    style V fill:#12241a,stroke:#3ce0e0,color:#eee
+    style H fill:#1a1f2e,stroke:#3ce0e0,color:#eee
+```
+
+The result is a real reduction in exposure. Instead of dozens of keys sitting in a plaintext file, there is one token, openable only with the hardware key in your hand. Chthonios does not replace your Vault or the Hermes Vault source. It puts a physical key in front of the one credential that unlocks them.
+
+```bash
+# Seal the token to your YubiKey (encryption only, no touch needed):
+printf '%s' "$VAULT_TOKEN" | chthonios vault seal-token redteam --stdin
+
+# Open a shell with the token, REQUIRES the key plugged in + a touch:
+eval "$(chthonios vault env redteam)"     # run in YOUR terminal
+```
+
+`vault env` prints only the `export VAULT_TOKEN=…` line on stdout, so it is safe to `eval`; every message goes to stderr, and the token is never written to disk in cleartext. It behaves like `ssh-agent` or `aws-vault exec`: the secret lives in the shell session, nowhere else.
+
+### Seeing where every secret actually lives
+
+`chthonios vault audit <profile>` answers one question directly: for this profile, is each secret served from Vault, sealed behind the key, or still exposed in a plaintext `.env`? It reads names and counts only, never values.
+
+```text
+╭───────────────────────────────────────────────────────────────────────╮
+│ Chthonios · secret audit · redteam                                    │
+├───────────────────────────────────────────────────────────────────────┤
+│ ◈ Vault source  on  hermes/env  6 keys                                │
+│ ◆ Vault token   SEALED behind YubiKey                                 │
+│ ✗ Redundant     1 keys in .env AND Vault  (safe to delete from .env)  │
+│ ✗ Exposed       50 keys ONLY in cleartext .env                        │
+╰───────────────────────────────────────────────────────────────────────╯
+```
+
+It also catches a specific trap. The Vault source can cache fetched secrets to disk if you leave `cache_ttl_seconds` above zero, which quietly writes your key *values* into a `vault_cache.json`. The audit flags any such file in red with its path and exits non-zero, so you can wire it into a pre-commit hook or CI and fail the build if secrets ever hit the disk. Keep `cache_ttl_seconds: 0` and the cache never forms.
+
 ## Auditing what is sealed
 
 `chthonios status` shows every profile at a glance: sealed, open, or unmanaged, with which backend, whether the seal is structurally intact, and when it was sealed. `chthonios verify` structurally validates each seal without any key or passphrase.
@@ -181,13 +235,16 @@ Small, readable, dependency-light. The cryptography lives in one file with no He
 |---|---|
 | `chthonios/sealing.py` | AES-GCM and scrypt envelope; file seal/unseal, no Hermes deps |
 | `chthonios/agefido.py` | `age` and FIDO2 `hmac-secret` key source (hardware-gated mode) |
+| `chthonios/vault.py` | seal/unseal the one `VAULT_TOKEN` behind the YubiKey |
+| `chthonios/audit.py` | secret-posture audit: Vault vs cleartext, cache-leak detector |
 | `chthonios/profiles.py` | Hermes profile path resolution and seal state |
 | `chthonios/auth.py` | passphrase prompt, keychain helpers |
 | `chthonios/cli.py` | the `chthonios` command |
 | `desktop-plugin/plugin.js` | statusbar lock chip and commands (reads state only) |
 | `chthonios/ui.py` | tiny ANSI presentation layer (zero deps, honors `NO_COLOR`) |
 | `skills/chthonios-seal-from-chat/` | Hermes skill to seal from chat, with the unseal boundary baked in |
-| `tests/` | round-trip, wrong-passphrase, tamper detection, no-leak |
+| `skills/chthonios-vault-token/` | Hermes skill for the Vault + hardware-sealed-token workflow |
+| `tests/` | round-trip, wrong-passphrase, tamper detection, no-leak, Vault, audit |
 
 ## Requirements
 

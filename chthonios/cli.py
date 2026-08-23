@@ -325,6 +325,138 @@ def cmd_verify(args) -> int:
     return 1 if bad else 0
 
 
+def cmd_vault_seal_token(args) -> int:
+    from . import vault
+    if not profiles.profile_exists(args.profile):
+        print(ui.fail(f"Profile '{args.profile}' not found."), file=sys.stderr)
+        return 1
+    # Read the token WITHOUT echoing and WITHOUT putting it in argv/history.
+    # Priority: --stdin (pipe), else a hidden prompt.
+    if args.stdin:
+        token = sys.stdin.readline()
+    else:
+        import getpass
+        token = getpass.getpass("Vault token (input hidden): ")
+    try:
+        out = vault.seal_token(args.profile, token,
+                               recipient=args.recipient, overwrite=args.force)
+    except vault.VaultTokenError as e:
+        print(ui.fail(str(e)), file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001
+        print(ui.fail(f"seal failed: {e}"), file=sys.stderr)
+        return 1
+    print(ui.sealed(f"Vault token sealed to YubiKey {ui.G.arrow} {out}"),
+          file=sys.stderr)
+    print(ui.c("  Open a shell session with:", "grey"), file=sys.stderr)
+    print(f"    eval \"$(chthonios vault env {args.profile})\"", file=sys.stderr)
+    return 0
+
+
+def cmd_vault_env(args) -> int:
+    """Print `export VAULT_TOKEN=...` on stdout for eval. Prompts YubiKey."""
+    from . import vault
+    try:
+        token = vault.unseal_token(args.profile)
+    except vault.VaultTokenError as e:
+        print(ui.fail(str(e)), file=sys.stderr)
+        return 1
+    except Exception as e:  # noqa: BLE001 — never leak partial state on stdout
+        print(ui.fail(f"unseal failed: {e}"), file=sys.stderr)
+        return 1
+    # STDOUT: only the export line, single-quoted so shell metachars are inert.
+    # A single quote inside the token is escaped the POSIX way ('\'').
+    safe = token.replace("'", "'\\''")
+    var = args.var or "VAULT_TOKEN"
+    sys.stdout.write(f"export {var}='{safe}'\n")
+    print(ui.opened(f"{var} exported into this shell (touch accepted)."),
+          file=sys.stderr)
+    return 0
+
+
+def cmd_vault_status(args) -> int:
+    from . import vault
+    profs = [args.profile] if args.profile else profiles.list_profiles()
+    lines = []
+    for prof in profs:
+        sealed = vault.is_token_sealed(prof)
+        has_rec = vault.recipient_path(prof).exists()
+        mark = ui.c(ui.G.lock, "violet") if sealed else ui.c(ui.G.unlock, "grey")
+        state = ui.c("token sealed", "violet") if sealed else ui.c("no sealed token", "grey")
+        rec = ui.c("YubiKey enrolled", "green") if has_rec else ui.c("no recipient", "amber")
+        lines.append(f"{mark} {ui.c(prof, 'bold')}  {state}  {ui.c('·', 'grey')} {rec}")
+    print(ui.box("Chthonios · Vault token", lines, accent="violet"))
+    return 0
+
+
+def cmd_vault_audit(args) -> int:
+    from . import audit as auditmod
+    rep = auditmod.audit(args.profile)
+    lines = []
+
+    # Vault source
+    if rep.vault_enabled:
+        if rep.vault_reachable:
+            loc = ui.c(f"{rep.vault_mount}/{rep.vault_path}", "cyan")
+            lines.append(ui.c(ui.G.chip, "cyan") +
+                         f" Vault source  {ui.c('on', 'green')}  {loc}  "
+                         f"{ui.c(f'{len(rep.vault_keys)} keys', 'bold')}")
+        else:
+            lines.append(ui.c(ui.G.chip, "amber") +
+                         f" Vault source  {ui.c('enabled but unreachable', 'amber')}")
+    else:
+        lines.append(ui.c(ui.G.chip, "grey") +
+                     f" Vault source  {ui.c('off', 'grey')}")
+
+    # Token seal (the Chthonios bridge)
+    if rep.token_sealed:
+        lines.append(ui.c(ui.G.lock, "violet") +
+                     f" Vault token   {ui.c('SEALED behind YubiKey', 'violet')}")
+    elif rep.recipient_enrolled:
+        lines.append(ui.c(ui.G.unlock, "amber") +
+                     f" Vault token   {ui.c('not sealed', 'amber')}  "
+                     f"{ui.c('(run: chthonios vault seal-token ' + rep.profile + ')', 'grey')}")
+    else:
+        lines.append(ui.c(ui.G.unlock, "grey") +
+                     f" Vault token   {ui.c('no YubiKey enrolled', 'grey')}")
+
+    # Cleartext exposure
+    covered = rep.cleartext_also_in_vault
+    only = rep.cleartext_only
+    if not rep.env_keys:
+        lines.append(ui.c(ui.G.check, "green") +
+                     f" Cleartext env {ui.c('empty', 'green')}  "
+                     f"{ui.c('(.env carries no keys)', 'grey')}")
+    else:
+        if covered:
+            lines.append(ui.c(ui.G.cross, "amber") +
+                         f" Redundant     {ui.c(f'{len(covered)} keys', 'amber')} in .env "
+                         f"{ui.c('AND', 'grey')} Vault  "
+                         f"{ui.c('(safe to delete from .env)', 'grey')}")
+        if only:
+            lines.append(ui.c(ui.G.cross, "red") +
+                         f" Exposed       {ui.c(f'{len(only)} keys', 'red', 'bold')} "
+                         f"ONLY in cleartext .env")
+
+    # Cache leak — the critical check
+    if rep.cache_leak_paths:
+        lines.append("")
+        lines.append(ui.c("⚠ CACHE LEAK", "red", "bold") +
+                     ui.c(f"  {len(rep.cache_leak_paths)} vault_cache.json with secret VALUES on disk", "red"))
+        for p in rep.cache_leak_paths:
+            lines.append(ui.c(f"    {p}", "red"))
+        lines.append(ui.c("    fix: set secrets.vault.cache_ttl_seconds: 0, then delete the file", "grey"))
+
+    accent = "red" if rep.cache_leak_paths or only else "violet"
+    print(ui.box(f"Chthonios · secret audit · {rep.profile}", lines, accent=accent))
+
+    for note in rep.notes:
+        print(ui.c("  " + ui.G.arrow + " " + note, "grey"))
+
+    # Exit non-zero on a real problem so it can gate CI / pre-commit.
+    return 1 if (rep.cache_leak_paths or only) else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="chthonios", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -394,6 +526,41 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--identity", help="age identity file (for .age artifacts)")
     up.add_argument("--dest", help="destination directory (default: alongside)")
     up.set_defaults(func=cmd_unpack)
+
+    # -- vault: seal the Vault bootstrap token behind the YubiKey ----------
+    v = sub.add_parser(
+        "vault",
+        help="seal/open the Vault token that unlocks the Hermes Vault source")
+    vsub = v.add_subparsers(dest="vault_cmd", required=True)
+
+    vseal = vsub.add_parser(
+        "seal-token",
+        help="seal a Vault token to the profile's YubiKey (no touch to seal)")
+    vseal.add_argument("profile")
+    vseal.add_argument("--stdin", action="store_true",
+                       help="read the token from stdin (pipe) instead of a hidden prompt")
+    vseal.add_argument("--recipient", help="explicit age recipient (else the profile's)")
+    vseal.add_argument("--force", action="store_true",
+                       help="replace an existing sealed token")
+    vseal.set_defaults(func=cmd_vault_seal_token)
+
+    venv = vsub.add_parser(
+        "env",
+        help="print `export VAULT_TOKEN=...` for eval (touch the YubiKey)")
+    venv.add_argument("profile")
+    venv.add_argument("--var", help="env var name to export (default VAULT_TOKEN)")
+    venv.set_defaults(func=cmd_vault_env)
+
+    vst = vsub.add_parser("status", help="show which profiles have a sealed Vault token")
+    vst.add_argument("profile", nargs="?")
+    vst.set_defaults(func=cmd_vault_status)
+
+    vau = vsub.add_parser(
+        "audit",
+        help="show where each secret lives: Vault / sealed / cleartext, + cache leaks")
+    vau.add_argument("profile")
+    vau.set_defaults(func=cmd_vault_audit)
+
     return p
 
 
