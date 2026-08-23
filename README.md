@@ -201,6 +201,8 @@ eval "$(chthonios vault env redteam)"     # run in YOUR terminal
 
 It also catches a specific trap. The Vault source can cache fetched secrets to disk if you leave `cache_ttl_seconds` above zero, which quietly writes your key *values* into a `vault_cache.json`. The audit flags any such file in red with its path and exits non-zero, so you can wire it into a pre-commit hook or CI and fail the build if secrets ever hit the disk. Keep `cache_ttl_seconds: 0` and the cache never forms.
 
+![chthonios vault audit, before and after sealing the token](assets/cli-vault-audit.png)
+
 ## Auditing what is sealed
 
 `chthonios status` shows every profile at a glance: sealed, open, or unmanaged, with which backend, whether the seal is structurally intact, and when it was sealed. `chthonios verify` structurally validates each seal without any key or passphrase.
