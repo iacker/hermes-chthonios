@@ -121,6 +121,15 @@ chthonios unseal redteam
 
 Nothing decrypts a hardware-sealed profile without the physical key in hand: not the agent, not a thief with your Mac, not a cloned disk.
 
+**One key, many profiles.** The FIDO2 credential lives on the token itself; a profile's `.chthonios.recipient` and `.chthonios.identity` only address it. So you enroll once and point every other profile at the same key — no second ceremony, no touch:
+
+```bash
+chthonios enroll-key htbfarmer --from-profile redteam
+chthonios seal htbfarmer --fido2
+```
+
+Step 1 above stays interactive and terminal-only on purpose: enrolling is a multi-prompt ceremony, and a mistyped PIN spends one of the token's limited retries (a FIDO2 key locks for good after eight).
+
 ## Sealing anything, not just profiles
 
 The same engine locks any file or directory you point it at, so Chthonios doubles as a general vault for a research folder, a notes vault, a scratch dir of credentials. Sealing needs no key (passphrase prompt, or a YubiKey recipient); unsealing enforces whatever the artifact was sealed with.
@@ -230,6 +239,25 @@ Yes. Chthonios is additive and non-invasive:
 ## Drive it from chat, no CLI
 
 Chthonios ships a Hermes **skill** (`skills/chthonios-seal-from-chat/`) so an agent can seal for you conversationally: say *"seal my redteam profile"* or *"encrypt this folder with my YubiKey"* and it asks what to lock and how, then runs it. The skill encodes the one boundary that matters: **the agent may seal, but a hardware (YubiKey) unseal is always handed back to your own terminal** where the touch happens. It also warns before taking a passphrase in chat and never shreds the original until you have verified the seal opens. Copy the skill folder into `~/.hermes/skills/security/` (or your profile's skills dir) to enable it.
+
+## Exit codes
+
+Failures are classified, so a caller — a script, or the HEUCAT desktop app — can
+tell what went wrong without grepping English out of stderr. Message text gets
+reworded and does not survive translation; a number does.
+
+| Code | Meaning |
+|---|---|
+| `0` | success |
+| `1` | anything not worth its own code |
+| `10` | wrong secret — bad passphrase, or bad FIDO2 PIN |
+| `11` | YubiKey ceremony failed — absent, not touched, or refused |
+| `12` | wrong state — already sealed, not sealed, nothing to seal |
+| `13` | not found — no such profile, or no recipient enrolled |
+| `14` | missing dependency — `age` or `age-plugin-fido2-hmac` |
+
+Numbering starts at 10 because `argparse` already exits `2` on a usage error.
+Pinned by `tests/test_exit_codes.py`.
 
 ## How it's built
 
