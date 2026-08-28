@@ -94,15 +94,20 @@ def seal_fido2(profile: str, recipient: str) -> Path:
     return out
 
 
-def unseal_fido2(profile: str, keep_sealed: bool = True) -> Path:
+def unseal_fido2(profile: str, keep_sealed: bool = True,
+                 pin: str | None = None) -> Path:
     """Decrypt with the FIDO2 identity. REQUIRES the YubiKey + a touch.
-    Must run in a TTY (the user's terminal), not the agent.
+
+    Without `pin`, age reads it from /dev/tty, so this must run in the user's
+    terminal. Pass `pin` (from a UI) to drive it without a controlling
+    terminal; the touch is still required on the token.
     """
     ep = env_path(profile)
     src = sealing.sealed_path(ep)
     if not src.exists():
         raise sealing.SealError(f"not sealed: {src}")
-    plaintext = agefido.decrypt_with_identity(src.read_bytes(), identity_path(profile))
+    plaintext = agefido.decrypt_with_identity(src.read_bytes(),
+                                              identity_path(profile), pin=pin)
     tmp = ep.with_suffix(ep.suffix + ".tmp")
     tmp.write_bytes(plaintext)
     os.chmod(tmp, 0o600)

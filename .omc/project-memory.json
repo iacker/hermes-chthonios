@@ -1,0 +1,118 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1787580111294,
+  "projectRoot": "/Users/billard/Hermes-Workspaces/Demos/hermes-chthonios",
+  "techStack": {
+    "languages": [
+      {
+        "name": "Python",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "pyproject.toml"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": "pytest",
+    "lintCommand": "ruff check",
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "assets",
+      "tests"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "assets": {
+      "path": "assets",
+      "purpose": "Static assets",
+      "fileCount": 8,
+      "lastAccessed": 1787580111238,
+      "keyFiles": [
+        "architecture.gif",
+        "architecture.png",
+        "cli-pack.png",
+        "cli-status.png",
+        "cli-vault-audit.png"
+      ]
+    },
+    "chthonios": {
+      "path": "chthonios",
+      "purpose": null,
+      "fileCount": 10,
+      "lastAccessed": 1787580111239,
+      "keyFiles": [
+        "__init__.py",
+        "agefido.py",
+        "audit.py",
+        "auth.py",
+        "cli.py"
+      ]
+    },
+    "desktop-plugin": {
+      "path": "desktop-plugin",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1787580111242,
+      "keyFiles": [
+        "plugin.js"
+      ]
+    },
+    "hermes_chthonios.egg-info": {
+      "path": "hermes_chthonios.egg-info",
+      "purpose": null,
+      "fileCount": 6,
+      "lastAccessed": 1787580111246,
+      "keyFiles": [
+        "PKG-INFO",
+        "SOURCES.txt",
+        "dependency_links.txt",
+        "entry_points.txt",
+        "requires.txt"
+      ]
+    },
+    "skills": {
+      "path": "skills",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1787580111247,
+      "keyFiles": []
+    },
+    "tests": {
+      "path": "tests",
+      "purpose": "Test files",
+      "fileCount": 7,
+      "lastAccessed": 1787580111249,
+      "keyFiles": [
+        "conftest.py",
+        "test_agefido.py",
+        "test_audit.py",
+        "test_pack.py",
+        "test_sealing.py"
+      ]
+    }
+  },
+  "hotPaths": [],
+  "userDirectives": []
+}

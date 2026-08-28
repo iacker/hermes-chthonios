@@ -99,10 +99,14 @@ def cmd_unseal(args) -> int:
         print(f"'{args.profile}' is not sealed.", file=sys.stderr)
         return 1
     if profiles.seal_backend(args.profile) == "fido2-hmac":
+        # With --pin-stdin the PIN arrives on stdin (a UI has no tty); age is
+        # then driven on a pty. Without it, age prompts on /dev/tty as before.
+        pin = sys.stdin.readline().rstrip("\n") if args.pin_stdin else None
         print(ui.c(f"{ui.G.key} Insert your YubiKey and touch it when it blinks...",
                    "amber"))
         try:
-            path = profiles.unseal_fido2(args.profile, keep_sealed=not args.forget)
+            path = profiles.unseal_fido2(args.profile, keep_sealed=not args.forget,
+                                         pin=pin)
         except (agefido.AgeError, sealing.SealError) as e:
             print(str(e), file=sys.stderr)
             return 1
@@ -484,6 +488,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="unlock via stored keychain passphrase (convenience)")
     u.add_argument("--forget", action="store_true",
                    help="delete the sealed copy after unsealing")
+    u.add_argument("--pin-stdin", action="store_true",
+                   help="read the FIDO2 PIN from stdin (for GUIs with no tty)")
     u.set_defaults(func=cmd_unseal)
 
     l = sub.add_parser("lock", help="drop the plaintext .env, keep the seal")

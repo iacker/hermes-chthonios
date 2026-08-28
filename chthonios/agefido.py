@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -81,23 +82,77 @@ def encrypt_to_recipient(plaintext: bytes, recipient: str) -> bytes:
     return proc.stdout
 
 
-def decrypt_with_identity(ciphertext: bytes, identity_file: Path) -> bytes:
+def decrypt_with_identity(ciphertext: bytes, identity_file: Path,
+                          pin: Optional[str] = None) -> bytes:
     """Decrypt with age using the fido2 identity file.
 
-    REQUIRES the YubiKey physically present + a touch. This blocks on the
-    device and therefore needs a TTY; call it from the user's terminal.
+    REQUIRES the YubiKey physically present + a touch.
+
+    `age` reads the token's PIN from /dev/tty, so a GUI caller (no controlling
+    terminal) fails with "device not configured". Passing `pin` runs age on a
+    pty instead, which age treats as a terminal and reads the PIN from — that
+    is the only way a UI can drive this. The touch still happens on the token,
+    so the hardware guarantee is unchanged: the PIN authorises the key, it
+    never leaves it.
+
+    ponytail: pty only when a pin is supplied; plain pipes otherwise, which
+    keeps the terminal path byte-identical to before.
     """
     if not Path(identity_file).exists():
         raise AgeError(f"identity file missing: {identity_file}")
-    proc = subprocess.run(
-        [_age_bin(), "-d", "-i", str(identity_file), "-o", "-"],
-        input=ciphertext, capture_output=True,
-    )
+    argv = [_age_bin(), "-d", "-i", str(identity_file), "-o", "-"]
+    if pin is not None:
+        return _run_on_pty(argv, ciphertext, pin)
+    proc = subprocess.run(argv, input=ciphertext, capture_output=True)
     if proc.returncode != 0:
         raise AgeError(
             "age decrypt failed (key unplugged, wrong token, or cancelled): "
             + proc.stderr.decode(errors="replace"))
     return proc.stdout
+
+
+def _run_on_pty(argv: list, ciphertext: bytes, pin: str) -> bytes:
+    """Run age with a pty for its PIN prompt, ciphertext on a real pipe.
+
+    stdout must stay a pipe: a pty would corrupt binary plaintext with newline
+    translation, and echo the PIN back into it.
+    """
+    import pty
+    import select
+
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(
+        argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=slave, close_fds=True,
+    )
+    os.close(slave)
+    assert proc.stdin is not None and proc.stdout is not None
+    try:
+        proc.stdin.write(ciphertext)
+        proc.stdin.close()
+        prompted = False
+        # The touch can take a while; the user has to physically reach the key.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline and proc.poll() is None:
+            ready, _, _ = select.select([master], [], [], 0.5)
+            if not ready:
+                continue
+            try:
+                chunk = os.read(master, 1024)
+            except OSError:
+                break
+            if not prompted and b"PIN" in chunk:
+                os.write(master, (pin + "\n").encode())
+                prompted = True
+        out = proc.stdout.read()
+        if proc.wait() != 0:
+            raise AgeError("age decrypt failed (wrong PIN, no touch, or key "
+                           "unplugged)")
+        return out
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        os.close(master)
 
 
 def decrypt_command(sealed_file: Path, out_file: Path, identity_file: Path) -> str:
