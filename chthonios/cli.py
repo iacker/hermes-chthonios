@@ -38,7 +38,18 @@ def _resolve_passphrase(profile: str, use_keychain: bool, confirm: bool = False)
 
 
 def cmd_enroll_key(args) -> int:
-    """Print the interactive command the user must run to bind a YubiKey."""
+    """Bind a YubiKey to a profile, or reuse one already bound to another."""
+    if args.from_profile:
+        try:
+            rec = profiles.reuse_key(args.from_profile, args.profile)
+        except (sealing.SealError, OSError) as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        print(ui.ok(f"'{args.profile}' now uses the same YubiKey as "
+                    f"'{args.from_profile}'"))
+        print(ui.c(f"   recipient {rec[:16]}…  ", "grey"))
+        print(f"Seal with:  chthonios seal {args.profile} --fido2")
+        return 0
     if not agefido.available():
         print("age + age-plugin-fido2-hmac required "
               "(brew install age; go install ...age-plugin-fido2-hmac).",
@@ -480,6 +491,9 @@ def build_parser() -> argparse.ArgumentParser:
     ek = sub.add_parser("enroll-key",
                         help="print the command to bind a YubiKey (FIDO2)")
     ek.add_argument("profile")
+    ek.add_argument("--from-profile", metavar="PROFILE",
+                    help="reuse the YubiKey already enrolled for PROFILE "
+                         "(no touch, no ceremony)")
     ek.set_defaults(func=cmd_enroll_key)
 
     u = sub.add_parser("unseal", help="decrypt a profile's .env for use")

@@ -72,6 +72,31 @@ def identity_path(profile: str) -> Path:
     return profile_dir(profile) / ".chthonios.identity"
 
 
+def reuse_key(source: str, target: str) -> str:
+    """Point `target` at the YubiKey already enrolled for `source`.
+
+    One physical key can open any number of profiles: the credential lives on
+    the token, and the two files here (public recipient + identity, which only
+    wraps a credential to that token) merely address it. Copying them binds a
+    second profile to the same key, with no ceremony and no touch.
+
+    ponytail: copy, not a shared path. Profiles stay self-contained, so
+    deleting one cannot break another.
+    """
+    src_rec = profile_dir(source) / ".chthonios.recipient"
+    src_id = identity_path(source)
+    if not src_rec.exists() or not src_id.exists():
+        raise sealing.SealError(
+            f"'{source}' has no enrolled YubiKey (run: chthonios enroll-key {source})")
+    if not profile_exists(target):
+        raise sealing.SealError(f"Profile '{target}' not found.")
+    for src, dst in ((src_rec, profile_dir(target) / ".chthonios.recipient"),
+                     (src_id, identity_path(target))):
+        dst.write_bytes(src.read_bytes())
+        os.chmod(dst, 0o600)
+    return src_rec.read_text().strip()
+
+
 def seal_fido2(profile: str, recipient: str) -> Path:
     """Encrypt the profile's .env to a FIDO2 age recipient. No token needed
     to seal. The plaintext .env is shredded; only the age ciphertext remains.
