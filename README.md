@@ -121,7 +121,7 @@ chthonios unseal redteam
 
 Nothing decrypts a hardware-sealed profile without the physical key in hand: not the agent, not a thief with your Mac, not a cloned disk.
 
-**One key, many profiles.** The FIDO2 credential lives on the token itself; a profile's `.chthonios.recipient` and `.chthonios.identity` only address it. So you enroll once and point every other profile at the same key — no second ceremony, no touch:
+**One key, many profiles.** The FIDO2 credential lives on the token itself; a profile's `.chthonios.recipient` and `.chthonios.identity` only address it. So you enroll once and point every other profile at the same key, with no second ceremony and no touch:
 
 ```bash
 chthonios enroll-key htbfarmer --from-profile redteam
@@ -158,7 +158,7 @@ A single file becomes `<name>.chthonios` / `<name>.age`; a directory is tarred i
 
 Sealing a `.env` protects one profile. But a lot of setups already keep their API keys in a real secret manager: HashiCorp Vault, for instance. Hermes has a built-in Vault secret source that reads your keys from a KV path at startup and injects them as environment variables, so nothing sits in a plaintext `.env` at all.
 
-> **Credit where due.** The Vault secret source itself is [`hermes-vault-secret-source`](https://github.com/cryptoyasenka/hermes-vault-secret-source) by [cryptoyasenka](https://github.com/cryptoyasenka) (`pip install hermes-vault-secret-source`, MIT) — a clean standalone plugin that reads a KV v2 path via `hvac`. Chthonios does not reimplement it; it composes with it, adding the one thing it cannot do on its own: put a physical key in front of the token that unlocks it.
+> **Credit where due.** The Vault secret source itself is [`hermes-vault-secret-source`](https://github.com/cryptoyasenka/hermes-vault-secret-source) by [cryptoyasenka](https://github.com/cryptoyasenka) (`pip install hermes-vault-secret-source`, MIT), a clean standalone plugin that reads a KV v2 path via `hvac`. Chthonios does not reimplement it; it composes with it, adding the one thing it cannot do on its own: put a physical key in front of the token that unlocks it.
 
 That source has one weak spot, and Chthonios closes it. To reach Vault, Hermes needs a single bootstrap credential in the environment first: `VAULT_TOKEN`. With that token, every key in Vault is reachable. Without it, nothing is. So the whole game reduces to one token, and Chthonios seals *that one token* behind your YubiKey.
 
@@ -242,7 +242,7 @@ Chthonios ships a Hermes **skill** (`skills/chthonios-seal-from-chat/`) so an ag
 
 ## Exit codes
 
-Failures are classified, so a caller — a script, or the HEUCAT desktop app — can
+Failures are classified, so a caller (a script, or the HEUCAT desktop app) can
 tell what went wrong without grepping English out of stderr. Message text gets
 reworded and does not survive translation; a number does.
 
@@ -250,11 +250,11 @@ reworded and does not survive translation; a number does.
 |---|---|
 | `0` | success |
 | `1` | anything not worth its own code |
-| `10` | wrong secret — bad passphrase, or bad FIDO2 PIN |
-| `11` | YubiKey ceremony failed — absent, not touched, or refused |
-| `12` | wrong state — already sealed, not sealed, nothing to seal |
-| `13` | not found — no such profile, or no recipient enrolled |
-| `14` | missing dependency — `age` or `age-plugin-fido2-hmac` |
+| `10` | wrong secret: bad passphrase, or bad FIDO2 PIN |
+| `11` | YubiKey ceremony failed: absent, not touched, or refused |
+| `12` | wrong state: already sealed, not sealed, nothing to seal |
+| `13` | not found: no such profile, or no recipient enrolled |
+| `14` | missing dependency: `age` or `age-plugin-fido2-hmac` |
 
 Numbering starts at 10 because `argparse` already exits `2` on a usage error.
 Pinned by `tests/test_exit_codes.py`.
