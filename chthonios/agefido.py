@@ -112,25 +112,35 @@ def decrypt_with_identity(ciphertext: bytes, identity_file: Path,
 
 
 def _run_on_pty(argv: list, ciphertext: bytes, pin: str) -> bytes:
-    """Run age with a pty for its PIN prompt, ciphertext on a real pipe.
+    """Run age with a pty on STDIN, so it can prompt for the token PIN.
 
-    stdout must stay a pipe: a pty would corrupt binary plaintext with newline
-    translation, and echo the PIN back into it.
+    age reads the PIN from stdin when stdin is a terminal, else from /dev/tty.
+    A GUI has neither, so stdin must BE the pty — which means the ciphertext
+    cannot also go through stdin. It goes to a 0600 temp file passed as argv
+    instead (it is ciphertext: useless without the token).
+
+    stdout stays a pipe: a pty would mangle binary plaintext and echo the PIN
+    into it.
     """
     import pty
     import select
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".age", delete=False) as tmp:
+        os.chmod(tmp.name, 0o600)
+        tmp.write(ciphertext)
+        sealed = tmp.name
 
     master, slave = pty.openpty()
     proc = subprocess.Popen(
-        argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        argv + [sealed], stdin=slave, stdout=subprocess.PIPE,
         stderr=slave, close_fds=True,
     )
     os.close(slave)
-    assert proc.stdin is not None and proc.stdout is not None
+    assert proc.stdout is not None
     try:
-        proc.stdin.write(ciphertext)
-        proc.stdin.close()
         prompted = False
+        seen = b""
         # The touch can take a while; the user has to physically reach the key.
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline and proc.poll() is None:
@@ -141,18 +151,28 @@ def _run_on_pty(argv: list, ciphertext: bytes, pin: str) -> bytes:
                 chunk = os.read(master, 1024)
             except OSError:
                 break
+            if not chunk:
+                break
+            seen += chunk
             if not prompted and b"PIN" in chunk:
                 os.write(master, (pin + "\n").encode())
                 prompted = True
         out = proc.stdout.read()
+        if proc.poll() is None:
+            proc.kill()
+            raise AgeError("timed out waiting for the YubiKey touch")
         if proc.wait() != 0:
+            if not prompted:
+                # Never even got the prompt: this is not a PIN problem, and
+                # saying "wrong PIN" here sends the user hunting the wrong bug.
+                detail = seen.decode(errors="replace").strip().replace("\r\n", " ")
+                raise AgeError("age never asked for the PIN: " + detail[-300:])
             raise AgeError("age decrypt failed (wrong PIN, no touch, or key "
                            "unplugged)")
         return out
     finally:
-        if proc.poll() is None:
-            proc.kill()
         os.close(master)
+        os.unlink(sealed)
 
 
 def decrypt_command(sealed_file: Path, out_file: Path, identity_file: Path) -> str:
