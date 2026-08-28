@@ -23,6 +23,20 @@ from pathlib import Path
 
 from . import __version__, auth, profiles, sealing, agefido, pack as packmod, ui
 
+# Exit codes. A caller (the UI) must be able to tell a wrong passphrase from a
+# missing profile without parsing English prose, which changes with wording and
+# does not exist at all in translated builds.
+#
+# Numbering starts at 10: argparse already exits 2 on a usage error, and 1 stays
+# the catch-all so anything unclassified keeps its old meaning.
+EXIT_OK = 0
+EXIT_ERROR = 1          # anything not worth its own code
+EXIT_WRONG_SECRET = 10  # wrong passphrase or wrong PIN
+EXIT_KEY_FAILED = 11    # YubiKey absent, not touched, or refused
+EXIT_STATE = 12         # already sealed, not sealed, nothing to seal
+EXIT_NOT_FOUND = 13     # no such profile, or not managed by chthonios
+EXIT_MISSING_DEP = 14   # age / age-plugin-fido2-hmac not installed
+
 
 def _resolve_passphrase(profile: str, use_keychain: bool, confirm: bool = False) -> str:
     if use_keychain:
@@ -31,7 +45,7 @@ def _resolve_passphrase(profile: str, use_keychain: bool, confirm: bool = False)
             if auth.touchid_authenticate(f"unlock profile '{profile}'"):
                 return pw
             print("Touch ID / auth failed.", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(EXIT_WRONG_SECRET)
         print("No keychain passphrase enrolled; falling back to prompt.",
               file=sys.stderr)
     return auth.prompt_passphrase(confirm=confirm)
@@ -44,17 +58,17 @@ def cmd_enroll_key(args) -> int:
             rec = profiles.reuse_key(args.from_profile, args.profile)
         except (sealing.SealError, OSError) as e:
             print(str(e), file=sys.stderr)
-            return 1
+            return EXIT_NOT_FOUND
         print(ui.ok(f"'{args.profile}' now uses the same YubiKey as "
                     f"'{args.from_profile}'"))
         print(ui.c(f"   recipient {rec[:16]}…  ", "grey"))
         print(f"Seal with:  chthonios seal {args.profile} --fido2")
-        return 0
+        return EXIT_OK
     if not agefido.available():
         print("age + age-plugin-fido2-hmac required "
               "(brew install age; go install ...age-plugin-fido2-hmac).",
               file=sys.stderr)
-        return 1
+        return EXIT_MISSING_DEP
     rec = profiles.profile_dir(args.profile) / ".chthonios.recipient"
     idf = profiles.identity_path(args.profile)
     print("Run THIS in your own terminal (needs the YubiKey + a touch):\n")
@@ -67,11 +81,11 @@ def cmd_enroll_key(args) -> int:
 def cmd_seal(args) -> int:
     if not profiles.profile_exists(args.profile):
         print(f"Profile '{args.profile}' not found.", file=sys.stderr)
-        return 1
+        return EXIT_NOT_FOUND
     if profiles.is_sealed(args.profile):
         print(f"'{args.profile}' is already sealed. Unseal before re-sealing.",
               file=sys.stderr)
-        return 1
+        return EXIT_STATE
     if args.fido2:
         rec_file = profiles.profile_dir(args.profile) / ".chthonios.recipient"
         if args.recipient:
@@ -81,8 +95,12 @@ def cmd_seal(args) -> int:
         else:
             print(f"No recipient found. Run: chthonios enroll-key {args.profile}",
                   file=sys.stderr)
-            return 1
-        out = profiles.seal_fido2(args.profile, recipient)
+            return EXIT_NOT_FOUND
+        try:
+            out = profiles.seal_fido2(args.profile, recipient)
+        except (sealing.SealError, agefido.AgeError) as e:
+            print(str(e), file=sys.stderr)
+            return EXIT_STATE
         print(ui.sealed(f"Sealed {ui.c(args.profile, 'white', 'bold')} "
                         f"{ui.c('(FIDO2)', 'cyan')}  {ui.c(ui.G.arrow, 'grey')}  "
                         f"{ui.c(str(out), 'dim')}"))
@@ -90,8 +108,13 @@ def cmd_seal(args) -> int:
                    "not the agent, not a thief, not a cloned disk", "grey"))
         return 0
     pw = auth.prompt_passphrase("New passphrase: ", confirm=True)
-    out = profiles.seal(args.profile, pw, hint=args.hint,
-                        require_touchid=args.touchid)
+    try:
+        out = profiles.seal(args.profile, pw, hint=args.hint,
+                            require_touchid=args.touchid)
+    except sealing.SealError as e:
+        # Nothing to seal (no .env) reached the UI as a raw Python traceback.
+        print(str(e), file=sys.stderr)
+        return EXIT_STATE
     print(ui.sealed(f"Sealed {ui.c(args.profile, 'white', 'bold')}  "
                     f"{ui.c(ui.G.arrow, 'grey')}  {ui.c(str(out), 'dim')}"))
     print(ui.c(f"   credentials are now unreadable until unsealed", "grey"))
@@ -108,7 +131,7 @@ def cmd_seal(args) -> int:
 def cmd_unseal(args) -> int:
     if not profiles.is_sealed(args.profile):
         print(f"'{args.profile}' is not sealed.", file=sys.stderr)
-        return 1
+        return EXIT_STATE
     if profiles.seal_backend(args.profile) == "fido2-hmac":
         # With --pin-stdin the PIN arrives on stdin (a UI has no tty); age is
         # then driven on a pty. Without it, age prompts on /dev/tty as before.
@@ -120,7 +143,9 @@ def cmd_unseal(args) -> int:
                                          pin=pin)
         except (agefido.AgeError, sealing.SealError) as e:
             print(str(e), file=sys.stderr)
-            return 1
+            # age cannot tell us which one it was, and guessing would mislabel
+            # a wrong PIN as a missing key. One code covers the whole ceremony.
+            return EXIT_KEY_FAILED
         print(ui.opened(f"Unsealed {ui.c(args.profile, 'white', 'bold')} "
                         f"{ui.c('(FIDO2)', 'cyan')}  {ui.c(ui.G.arrow, 'grey')}  "
                         f"{ui.c(str(path), 'dim')}"))
@@ -131,7 +156,7 @@ def cmd_unseal(args) -> int:
         path = profiles.unseal(args.profile, pw, keep_sealed=not args.forget)
     except sealing.UnsealError:
         print(ui.fail("Wrong passphrase. Profile stays sealed."), file=sys.stderr)
-        return 1
+        return EXIT_WRONG_SECRET
     print(ui.opened(f"Unsealed {ui.c(args.profile, 'white', 'bold')}  "
                     f"{ui.c(ui.G.arrow, 'grey')}  {ui.c(str(path), 'dim')}"))
     print(ui.c("   credentials available for this session", "grey"))
@@ -143,7 +168,7 @@ def cmd_lock(args) -> int:
         removed = profiles.relock(args.profile)
     except sealing.SealError as e:
         print(str(e), file=sys.stderr)
-        return 1
+        return EXIT_STATE
     print(f"Locked '{args.profile}'." if removed
           else f"'{args.profile}' was already locked.")
     return 0
@@ -152,13 +177,13 @@ def cmd_lock(args) -> int:
 def cmd_rekey(args) -> int:
     if not profiles.is_sealed(args.profile):
         print(f"'{args.profile}' is not sealed.", file=sys.stderr)
-        return 1
+        return EXIT_STATE
     old = auth.prompt_passphrase("Current passphrase: ")
     try:
         profiles.unseal(args.profile, old, keep_sealed=True)
     except sealing.UnsealError:
         print("Wrong passphrase.", file=sys.stderr)
-        return 1
+        return EXIT_WRONG_SECRET
     # remove old seal, re-seal with new passphrase
     sealing.sealed_path(profiles.env_path(args.profile)).unlink()
     new = auth.prompt_passphrase("New passphrase: ", confirm=True)
@@ -174,7 +199,7 @@ def cmd_enroll(args) -> int:
         profiles.relock(args.profile)
     except sealing.UnsealError:
         print("Wrong passphrase; not enrolling.", file=sys.stderr)
-        return 1
+        return EXIT_WRONG_SECRET
     if auth.keychain_store(args.profile, pw):
         st = profiles.load_state(args.profile)
         st["require_touchid"] = True
