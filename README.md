@@ -84,9 +84,14 @@ flowchart LR
 
 ### Install
 
+Not on PyPI. Install straight from GitHub:
+
 ```bash
-pip install -e .          # provides the `chthonios` CLI
+pip install git+https://github.com/iacker/hermes-chthonios
+chthonios --version
 ```
+
+Or from a clone, `pip install -e .`. Both provide the `chthonios` CLI.
 
 Optional desktop lock UI:
 
@@ -104,6 +109,14 @@ chthonios status                   # table of every profile
 chthonios unseal redteam           # decrypt for a session
 chthonios lock   redteam           # drop plaintext, keep the seal
 chthonios rekey  redteam           # change the passphrase
+chthonios enroll redteam           # macOS: keep the passphrase in the login keychain, unseal without typing it
+```
+
+Every prompt also reads stdin, so scripts and other agents can drive it:
+
+```bash
+printf 'pass\npass\n' | chthonios seal   redteam   # asked twice on seal
+printf 'pass\n'       | chthonios unseal redteam
 ```
 
 ### Mode B, YubiKey (hardware-gated, strongest)
