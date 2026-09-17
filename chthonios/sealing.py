@@ -31,6 +31,18 @@ from typing import Optional
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
+
+def write_private_bytes(path, data: bytes) -> None:
+    """Write ``data`` to ``path`` created 0600 atomically, with no world/group
+    -readable window. Using O_CREAT|O_EXCL with mode 0600 means the file is
+    never briefly readable before a later chmod (avoids a TOCTOU disclosure of
+    restored plaintext on a shared host)."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
 SEAL_VERSION = 1
 # scrypt work factor. N=2**20 ~ interactive-secure on a modern laptop (~1s,
 # ~1GB RAM). Overridable via CHTHONIOS_SCRYPT_N so tests/CI can run cheaply;
@@ -113,6 +125,11 @@ def unseal_bytes(envelope: dict, passphrase: str) -> bytes:
         p = int(envelope.get("p", SCRYPT_P))
     except (KeyError, ValueError, TypeError) as e:
         raise SealError(f"malformed sealed envelope: {e}") from e
+    # Bound attacker-controlled KDF cost: n/r/p come straight from the envelope
+    # and are consumed by scrypt BEFORE the AEAD tag is checked, so a tampered
+    # file with a huge n would force a multi-GB allocation on any unseal attempt.
+    if n < 2 or (n & (n - 1)) != 0 or n > (1 << 21) or not (1 <= r <= 16) or not (1 <= p <= 4):
+        raise SealError("unreasonable KDF parameters in sealed envelope")
     key = _derive_key(passphrase, salt, n, r, p)
     try:
         return AESGCM(key).decrypt(nonce, ct, None)
@@ -166,8 +183,7 @@ def unseal_file(env_path: Path, passphrase: str, keep_sealed: bool = True) -> Pa
     envelope = json.loads(src.read_text())
     plaintext = unseal_bytes(envelope, passphrase)  # raises UnsealError if wrong
     tmp = env_path.with_suffix(env_path.suffix + ".tmp")
-    tmp.write_bytes(plaintext)
-    os.chmod(tmp, 0o600)
+    write_private_bytes(tmp, plaintext)
     os.replace(tmp, env_path)
     if not keep_sealed:
         src.unlink()

@@ -1,7 +1,59 @@
 """Tests for generic pack/unpack of files and directories (passphrase mode)."""
+import io
+import tarfile
+
 import pytest
 
 from chthonios import pack, sealing
+
+
+def _extract(members_builder, tmp_path):
+    """Build a hostile tar in memory and run it through _safe_extract."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        members_builder(tar)
+    buf.seek(0)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    with tarfile.open(fileobj=buf, mode="r") as tar:
+        pack._safe_extract(tar, dest)
+
+
+def test_safe_extract_rejects_parent_traversal(tmp_path):
+    def build(tar):
+        data = b"pwned"
+        info = tarfile.TarInfo("../escape.txt")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+
+    with pytest.raises(sealing.SealError):
+        _extract(build, tmp_path)
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_safe_extract_rejects_sibling_prefix(tmp_path):
+    # dest is <tmp>/out ; a member resolving into <tmp>/out-evil must be refused
+    def build(tar):
+        data = b"pwned"
+        info = tarfile.TarInfo("../out-evil/x.txt")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+
+    with pytest.raises(sealing.SealError):
+        _extract(build, tmp_path)
+    assert not (tmp_path / "out-evil").exists()
+
+
+def test_safe_extract_rejects_symlink_member(tmp_path):
+    def build(tar):
+        info = tarfile.TarInfo("link")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "/etc/passwd"
+        tar.addfile(info)
+
+    with pytest.raises(sealing.SealError):
+        _extract(build, tmp_path)
+    assert not (tmp_path / "out" / "link").exists()
 
 
 def test_pack_unpack_file_roundtrip(tmp_path):
