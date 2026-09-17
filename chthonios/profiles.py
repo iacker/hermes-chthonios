@@ -134,8 +134,7 @@ def unseal_fido2(profile: str, keep_sealed: bool = True,
     plaintext = agefido.decrypt_with_identity(src.read_bytes(),
                                               identity_path(profile), pin=pin)
     tmp = ep.with_suffix(ep.suffix + ".tmp")
-    tmp.write_bytes(plaintext)
-    os.chmod(tmp, 0o600)
+    sealing.write_private_bytes(tmp, plaintext)
     os.replace(tmp, ep)
     if not keep_sealed:
         src.unlink()

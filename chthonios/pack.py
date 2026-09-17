@@ -131,8 +131,7 @@ def unpack(sealed, passphrase: Optional[str] = None,
     else:
         out = out_dir / inner
         tmp = out.with_suffix(out.suffix + ".tmp")
-        tmp.write_bytes(data)
-        os.chmod(tmp, 0o600)
+        sealing.write_private_bytes(tmp, data)
         os.replace(tmp, out)
         return out
 
@@ -141,7 +140,9 @@ def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
     """Extract, refusing any member that would escape dest (path traversal)."""
     dest = dest.resolve()
     for member in tar.getmembers():
+        if member.issym() or member.islnk() or member.isdev():
+            raise sealing.SealError(f"unsafe member type in archive: {member.name}")
         target = (dest / member.name).resolve()
-        if not str(target).startswith(str(dest)):
+        if target != dest and dest not in target.parents:
             raise sealing.SealError(f"unsafe path in archive: {member.name}")
     tar.extractall(str(dest))
